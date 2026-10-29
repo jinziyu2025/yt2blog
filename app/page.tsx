@@ -1,0 +1,1029 @@
+"use client";
+
+import type { FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+
+/* ------------------------------------------------------------------ */
+/*  Types                                                              */
+/* ------------------------------------------------------------------ */
+
+type BlogSection = {
+  heading: string;
+  body: string;
+};
+
+type BlogPost = {
+  videoId: string;
+  title: string;
+  slug: string;
+  metaDescription: string;
+  intro: string;
+  sections: BlogSection[];
+  conclusion: string;
+  wordCount: number;
+  readingMinutes: number;
+  generatedAt: string;
+};
+
+type Status = "idle" | "loading" | "streaming" | "success" | "error";
+
+type StreamMeta = {
+  title: string;
+  slug: string;
+  metaDescription: string;
+  cached?: boolean;
+};
+
+type CopyFeedback = "article" | "meta" | "error" | null;
+
+/* ------------------------------------------------------------------ */
+/*  URL validation (client-side, for instant inline feedback)          */
+/* ------------------------------------------------------------------ */
+
+function parseYouTubeUrl(raw: string): {
+  videoId: string | null;
+  error: string | null;
+} {
+  const value = raw.trim();
+
+  if (!value) {
+    return { videoId: null, error: "Paste a YouTube link to get started." };
+  }
+
+  // Allow people to paste "youtube.com/watch?v=..." without the scheme.
+  const candidate = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return {
+      videoId: null,
+      error: "That does not look like a valid URL. Try youtube.com/watch?v=...",
+    };
+  }
+
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  const idPattern = /^[A-Za-z0-9_-]{11}$/;
+
+  const isYouTubeHost =
+    host === "youtu.be" ||
+    host === "youtube.com" ||
+    host === "m.youtube.com" ||
+    host === "youtube-nocookie.com";
+
+  if (!isYouTubeHost) {
+    return {
+      videoId: null,
+      error: "Only YouTube links are supported. Paste a youtube.com or youtu.be URL.",
+    };
+  }
+
+  if (host === "youtu.be") {
+    const id = segments[0] ?? parsed.searchParams.get("v") ?? "";
+    return idPattern.test(id)
+      ? { videoId: id, error: null }
+      : { videoId: null, error: "That youtu.be link is missing a valid video ID." };
+  }
+
+  const firstSegment = segments[0] ?? "";
+
+  if (firstSegment === "watch") {
+    const id = parsed.searchParams.get("v") ?? "";
+    return idPattern.test(id)
+      ? { videoId: id, error: null }
+      : {
+          videoId: null,
+          error: "That watch link is missing a ?v= video ID.",
+        };
+  }
+
+  if (["shorts", "embed", "live", "v"].includes(firstSegment)) {
+    const id = segments[1] ?? "";
+    return idPattern.test(id)
+      ? { videoId: id, error: null }
+      : {
+          videoId: null,
+          error: `That ${firstSegment} link is missing a valid video ID.`,
+        };
+  }
+
+  return {
+    videoId: null,
+    error: "Unsupported YouTube URL. Use watch?v=, youtu.be, or /shorts/ links.",
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+function buildArticleText(post: BlogPost): string {
+  const lines: string[] = [
+    post.title,
+    "",
+    `Suggested slug: /blog/${post.slug}`,
+    `Meta description: ${post.metaDescription}`,
+    "",
+    post.intro,
+    "",
+  ];
+
+  post.sections.forEach((section) => {
+    lines.push(section.heading, "", section.body, "");
+  });
+
+  lines.push("Final thought", "", post.conclusion, "");
+  lines.push(`Source: https://youtube.com/watch?v=${post.videoId}`);
+
+  return lines.join("\n");
+}
+
+/**
+ * Streaming generation request.
+ *
+ * The browser only talks to our own `/api/generate` route. The DeepSeek
+ * key lives in the server env (DEEPSEEK_API_KEY) and never reaches the
+ * client. The route responds with text/event-stream; we parse it by hand
+ * (no extra dependency) and surface every event as it arrives:
+ *   meta -> title/slug/meta ready, delta -> body text, done -> final article.
+ */
+async function streamBlogPost(
+  url: string,
+  options: {
+    refresh: boolean;
+    signal: AbortSignal;
+    onMeta: (meta: StreamMeta) => void;
+    onDelta: (text: string) => void;
+    onRevise?: (info: { reason: string }) => void;
+  }
+): Promise<BlogPost> {
+  const response = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ url, refresh: options.refresh }),
+    signal: options.signal,
+  });
+
+  const contentType = response.headers.get("content-type") ?? "";
+
+  // Validation and transcript failures arrive as plain JSON with a real status.
+  if (!response.ok || !contentType.includes("text/event-stream")) {
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    const message =
+      payload &&
+      typeof payload === "object" &&
+      typeof (payload as { message?: unknown }).message === "string" &&
+      (payload as { message: string }).message
+        ? (payload as { message: string }).message
+        : `Generation failed (HTTP ${response.status}).`;
+
+    throw new Error(message);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("The server returned an empty stream. Try again.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalPost: BlogPost | null = null;
+  let streamError: Error | null = null;
+
+  const handleFrame = (raw: string) => {
+    let event = "message";
+    const dataLines: string[] = [];
+
+    raw.split("\n").forEach((line) => {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    });
+
+    if (dataLines.length === 0) return;
+
+    let data: unknown;
+    try {
+      data = JSON.parse(dataLines.join("\n"));
+    } catch {
+      return;
+    }
+
+    if (event === "meta") {
+      options.onMeta(data as StreamMeta);
+    } else if (
+      event === "delta" &&
+      typeof (data as { text?: unknown }).text === "string"
+    ) {
+      options.onDelta((data as { text: string }).text);
+    } else if (event === "done") {
+      finalPost = data as BlogPost;
+    } else if (event === "revise") {
+      options.onRevise?.({
+        reason:
+          typeof (data as { reason?: unknown }).reason === "string"
+            ? (data as { reason: string }).reason
+            : "style revision",
+      });
+    } else if (event === "error") {
+      const message = (data as { message?: unknown }).message;
+      streamError = new Error(
+        typeof message === "string" && message
+          ? message
+          : "Generation failed on the server."
+      );
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      handleFrame(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      if (streamError) break;
+      boundary = buffer.indexOf("\n\n");
+    }
+
+    if (streamError) break;
+  }
+
+  if (streamError) throw streamError;
+  if (!finalPost) {
+    throw new Error("The stream ended before the article was ready. Try again.");
+  }
+
+  return finalPost;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Inline icons (kept in-file so the page stays a single component)   */
+/* ------------------------------------------------------------------ */
+
+function PlayMark() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5">
+      <path d="M8 5.5v13l10-6.5-10-6.5z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-4 w-4 animate-spin"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
+      <path d="M12 3a9 9 0 1 0 9 9" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="9" width="11" height="11" rx="2.5" />
+      <path d="M5 15V5.5A2.5 2.5 0 0 1 7.5 3H15" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M21 2v6h-6" />
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+      <path d="M3 22v-6h6" />
+      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="mt-0.5 h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 8v4" />
+      <path d="M12 16h.01" />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Page                                                               */
+/* ------------------------------------------------------------------ */
+
+const GHOST_BUTTON =
+  "inline-flex items-center gap-1.5 rounded-lg border border-line bg-white/[0.02] px-3 py-1.5 text-xs text-muted transition hover:bg-white/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+
+const SOLID_BUTTON =
+  "inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
+
+export default function HomePage() {
+  const [url, setUrl] = useState("");
+  const [status, setStatus] = useState<Status>("idle");
+  const [post, setPost] = useState<BlogPost | null>(null);
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [activeUrl, setActiveUrl] = useState("");
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
+
+  // Live stream state: title lands first, body text is appended in batches.
+  const [streamTitle, setStreamTitle] = useState("");
+  const [streamMetaDescription, setStreamMetaDescription] = useState("");
+  const [streamText, setStreamText] = useState("");
+  const [reviseNotice, setReviseNotice] = useState("");
+
+  const abortRef = useRef<AbortController | null>(null);
+  const bufferRef = useRef("");
+  const flushTimerRef = useRef<number | null>(null);
+  const streamBoxRef = useRef<HTMLDivElement | null>(null);
+
+  const isGenerating = status === "loading" || status === "streaming";
+
+  /* ------------ actions ------------ */
+
+  function clearFlushTimer() {
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  }
+
+  // Batch deltas into ~50ms frames so React does not re-render per token.
+  function scheduleFlush() {
+    if (flushTimerRef.current !== null) return;
+
+    flushTimerRef.current = window.setTimeout(() => {
+      flushTimerRef.current = null;
+      setStreamText(bufferRef.current);
+    }, 50);
+  }
+
+  async function runGenerate(sourceUrl: string, refresh = false) {
+    abortRef.current?.abort();
+    clearFlushTimer();
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    bufferRef.current = "";
+    setStreamText("");
+    setStreamTitle("");
+    setStreamMetaDescription("");
+    setReviseNotice("");
+    setStatus("loading");
+    setErrorMessage("");
+    setPost(null);
+    setCopyFeedback(null);
+
+    try {
+      const result = await streamBlogPost(sourceUrl, {
+        refresh,
+        signal: controller.signal,
+        onMeta: (meta) => {
+          setStreamTitle(meta.title);
+          setStreamMetaDescription(meta.metaDescription);
+          setStatus("streaming");
+        },
+        onDelta: (text) => {
+          bufferRef.current += text;
+          setReviseNotice("");
+          setStatus("streaming");
+          scheduleFlush();
+        },
+        onRevise: () => {
+          // The server is rewriting repetitive paragraph openers: drop the
+          // first draft so the rewrite streams in cleanly.
+          clearFlushTimer();
+          bufferRef.current = "";
+          setStreamText("");
+          setReviseNotice("Rewriting repetitive paragraph openers…");
+        },
+      });
+
+      clearFlushTimer();
+      setPost(result);
+      setStatus("success");
+    } catch (caught) {
+      clearFlushTimer();
+
+      if (controller.signal.aborted) {
+        // User pressed Cancel: drop the partial draft and go back to idle.
+        bufferRef.current = "";
+        setStreamText("");
+        setStreamTitle("");
+        setStreamMetaDescription("");
+        setStatus("idle");
+        return;
+      }
+
+      setStatus("error");
+      setErrorMessage(
+        caught instanceof Error
+          ? caught.message
+          : "Generation failed for an unknown reason. Please try again."
+      );
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const parsed = parseYouTubeUrl(url);
+
+    if (!parsed.videoId) {
+      setFieldError(parsed.error ?? "Invalid YouTube URL.");
+      return;
+    }
+
+    setFieldError(null);
+    setActiveUrl(url.trim());
+    void runGenerate(url.trim());
+  }
+
+  function handleCancel() {
+    abortRef.current?.abort();
+  }
+
+  function handleRegenerate() {
+    if (!activeUrl || isGenerating) return;
+    void runGenerate(activeUrl, true);
+  }
+
+  function handleRetry() {
+    if (!activeUrl) return;
+    void runGenerate(activeUrl);
+  }
+
+  function flashCopy(feedback: Exclude<CopyFeedback, null>) {
+    setCopyFeedback(feedback);
+    window.setTimeout(() => setCopyFeedback(null), 1800);
+  }
+
+  async function copyToClipboard(text: string): Promise<boolean> {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fall through to the legacy path below.
+    }
+
+    try {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      document.body.appendChild(helper);
+      helper.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(helper);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function handleCopyArticle() {
+    if (!post) return;
+    const ok = await copyToClipboard(buildArticleText(post));
+    flashCopy(ok ? "article" : "error");
+  }
+
+  async function handleCopyMeta() {
+    if (!post) return;
+    const ok = await copyToClipboard(post.metaDescription);
+    flashCopy(ok ? "meta" : "error");
+  }
+
+  useEffect(() => {
+    if (status !== "streaming") return;
+    const box = streamBoxRef.current;
+    if (box) box.scrollTop = box.scrollHeight;
+  }, [streamText, status]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      if (flushTimerRef.current !== null) {
+        window.clearTimeout(flushTimerRef.current);
+      }
+    };
+  }, []);
+
+  /* ------------ render ------------ */
+
+  // Defensive guard: the persona tag is internal metadata and must never reach
+  // the reader, even if a future prompt change lets it slip into the stream.
+  const visibleStreamText = streamText.replace(
+    /<persona>[\s\S]*?<\/persona>/gi,
+    ""
+  );
+
+  return (
+    <main className="relative min-h-screen overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute left-1/2 top-[-260px] h-[520px] w-[880px] -translate-x-1/2 rounded-full bg-accent/5 blur-[130px]"
+      />
+
+      <div className="relative mx-auto w-full max-w-3xl px-5 pb-20 pt-8 sm:px-8">
+        {/* Header */}
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-surface text-accent">
+              <PlayMark />
+            </span>
+            <span className="text-sm font-semibold tracking-tight text-ink">
+              YT2Blog
+            </span>
+          </div>
+
+          <div className="hidden items-center gap-2 text-[11px] text-muted sm:flex">
+            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+            Live API · DeepSeek
+          </div>
+        </header>
+
+        {/* Hero */}
+        <section className="mt-12 sm:mt-16">
+          <p className="inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-[10.5px] uppercase tracking-[0.16em] text-muted">
+            YouTube to blog · in seconds
+          </p>
+
+          <h1 className="mt-6 text-balance text-3xl font-semibold leading-[1.12] tracking-[-0.03em] text-ink sm:text-[44px]">
+            Turn any YouTube video into a{" "}
+            <span className="text-accent">SEO-friendly</span> blog post in
+            seconds
+          </h1>
+
+          <p className="mt-5 max-w-xl text-[14.5px] leading-7 text-muted">
+            Paste a link and get a structured draft — title, slug, meta
+            description, and readable sections, generated server-side by DeepSeek.
+          </p>
+        </section>
+
+        {/* Input */}
+        <form onSubmit={handleSubmit} className="mt-9">
+          <div
+            className={`rounded-2xl border bg-surface/70 p-2 backdrop-blur-sm transition focus-within:ring-1 focus-within:ring-accent/25 ${
+              fieldError
+                ? "border-red-400/40"
+                : "border-line focus-within:border-accent/40"
+            }`}
+          >
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="flex-1">
+                <label htmlFor="youtube-url" className="sr-only">
+                  YouTube video URL
+                </label>
+                <input
+                  id="youtube-url"
+                  name="youtube-url"
+                  type="text"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste a YouTube link — youtube.com/watch?v=..."
+                  value={url}
+                  onChange={(event) => {
+                    setUrl(event.target.value);
+                    if (fieldError) setFieldError(null);
+                  }}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? "url-error" : "url-hint"}
+                  className="h-14 w-full rounded-xl bg-transparent px-4 text-[14.5px] text-ink placeholder:text-muted/60 focus:outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isGenerating}
+                className="group inline-flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 text-[14.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] active:bg-[#CFF036] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:w-auto sm:min-w-[150px]"
+              >
+                {isGenerating ? (
+                  <>
+                    <Spinner />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    Generate
+                    <ArrowIcon />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Inline validation / helpers */}
+          {fieldError ? (
+            <p
+              id="url-error"
+              role="alert"
+              className="mt-3 flex items-start gap-2 text-[12.5px] text-red-300"
+            >
+              <AlertIcon />
+              <span>{fieldError}</span>
+            </p>
+          ) : (
+            <div
+              id="url-hint"
+              className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-muted/75"
+            >
+              <span>Works with</span>
+              <code className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">
+                youtube.com/watch?v=…
+              </code>
+              <code className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">
+                youtu.be/…
+              </code>
+              <code className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">
+                youtube.com/shorts/…
+              </code>
+            </div>
+          )}
+        </form>
+
+        {/* Idle steps */}
+        {status === "idle" && (
+          <div className="mt-16 grid gap-3 sm:grid-cols-3">
+            {[
+              {
+                step: "01",
+                title: "Paste a link",
+                detail: "Any watch, youtu.be, or shorts URL.",
+              },
+              {
+                step: "02",
+                title: "Generate",
+                detail: "DeepSeek drafts the article server-side.",
+              },
+              {
+                step: "03",
+                title: "Copy & publish",
+                detail: "Edit it, paste into your CMS, ship.",
+              },
+            ].map((item) => (
+              <div
+                key={item.step}
+                className="rounded-xl border border-line bg-surface/40 p-4"
+              >
+                <p className="font-mono text-[10.5px] tracking-[0.12em] text-muted/50">
+                  {item.step}
+                </p>
+                <p className="mt-2 text-[13px] font-medium text-ink">
+                  {item.title}
+                </p>
+                <p className="mt-1 text-[12px] leading-5 text-muted/75">
+                  {item.detail}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Streaming / loading */}
+        {(status === "loading" || status === "streaming") && (
+          <section
+            aria-busy="true"
+            aria-live="polite"
+            className="mt-12 animate-fade-up rounded-2xl border border-line bg-surface p-6 sm:p-8"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full bg-accent ${
+                    status === "streaming" ? "animate-pulse" : ""
+                  }`}
+                />
+                {status === "streaming"
+                  ? "Streaming your draft…"
+                  : "Fetching captions & drafting…"}
+              </p>
+
+              <div className="flex items-center gap-2">
+                <p className="font-mono text-[10.5px] text-muted/60">live stream</p>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className={GHOST_BUTTON}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+
+            {!streamTitle && !streamText && (
+              <>
+                <div className="mt-6 space-y-3">
+                  <div className="skeleton h-6 w-4/5" />
+                  <div className="skeleton h-3 w-2/5" />
+                </div>
+
+                <div className="mt-8 space-y-2.5">
+                  <div className="skeleton h-3 w-full" />
+                  <div className="skeleton h-3 w-11/12" />
+                  <div className="skeleton h-3 w-4/5" />
+                </div>
+
+                <div className="mt-7 space-y-2.5">
+                  <div className="skeleton h-4 w-1/3" />
+                  <div className="skeleton h-3 w-full" />
+                  <div className="skeleton h-3 w-10/12" />
+                </div>
+              </>
+            )}
+
+            {streamTitle && (
+              <h2 className="mt-6 text-[24px] font-semibold leading-[1.25] tracking-[-0.02em] text-ink sm:text-[30px]">
+                {streamTitle}
+              </h2>
+            )}
+
+            {streamMetaDescription && (
+              <p className="mt-3 border-l-2 border-accent/50 pl-3 text-[12.5px] leading-6 text-muted">
+                {streamMetaDescription}
+              </p>
+            )}
+
+            {reviseNotice && (
+              <p className="mt-4 font-mono text-[11px] text-accent/80">
+                {reviseNotice}
+              </p>
+            )}
+
+            {visibleStreamText && (
+              <div
+                ref={streamBoxRef}
+                className="mt-6 max-h-[58vh] overflow-y-auto pr-1"
+              >
+                <div className="space-y-3.5">
+                  {visibleStreamText.split("\n").map((line, index) => {
+                    const trimmed = line.trim();
+                    if (!trimmed) return null;
+                    // The persona label is internal (server logs only).
+                    if (/^<\/?persona/i.test(trimmed)) return null;
+
+                    if (trimmed.startsWith("## ")) {
+                      return (
+                        <h3
+                          key={index}
+                          className="pt-2 text-[17px] font-semibold tracking-[-0.01em] text-ink"
+                        >
+                          {trimmed.slice(3)}
+                        </h3>
+                      );
+                    }
+
+                    if (trimmed.startsWith("# ")) {
+                      return (
+                        <h3
+                          key={index}
+                          className="text-[17px] font-semibold tracking-[-0.01em] text-ink"
+                        >
+                          {trimmed.slice(2)}
+                        </h3>
+                      );
+                    }
+
+                    return (
+                      <p
+                        key={index}
+                        className="text-[14.5px] leading-[1.85] text-[#C8C8D0]"
+                      >
+                        {trimmed}
+                      </p>
+                    );
+                  })}
+                </div>
+                <span className="mt-1 inline-block h-4 w-1.5 animate-pulse bg-accent align-middle" />
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Error */}
+        {status === "error" && (
+          <section
+            role="alert"
+            className="mt-12 animate-fade-up rounded-2xl border border-red-400/25 bg-red-500/5 p-6"
+          >
+            <p className="flex items-center gap-2 text-[13.5px] font-medium text-red-200">
+              <AlertIcon />
+              Generation failed
+            </p>
+            <p className="mt-2 whitespace-pre-wrap break-words text-[13px] leading-6 text-muted">
+              {errorMessage}
+            </p>
+            <div className="mt-4">
+              <button type="button" onClick={handleRetry} className={GHOST_BUTTON}>
+                <RefreshIcon />
+                Try again
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* Article */}
+        {status === "success" && post && (
+          <article className="mt-12 animate-fade-up overflow-hidden rounded-2xl border border-line bg-surface">
+            {/* Toolbar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5 sm:px-8">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.03] px-2 py-1 text-[10.5px] uppercase tracking-[0.12em]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                  Draft ready
+                </span>
+                <span className="text-muted/40">·</span>
+                <span>{post.wordCount} words</span>
+                <span className="text-muted/40">·</span>
+                <span>{post.readingMinutes} min read</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRegenerate}
+                  className={GHOST_BUTTON}
+                >
+                  <RefreshIcon />
+                  Regenerate
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyArticle}
+                  className={SOLID_BUTTON}
+                >
+                  <CopyIcon />
+                  {copyFeedback === "article"
+                    ? "Copied"
+                    : copyFeedback === "error"
+                      ? "Copy failed"
+                      : "Copy article"}
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-8 sm:px-10 sm:py-10">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted/70">
+                <span className="rounded-md border border-line bg-black/30 px-2 py-1 text-ink/70">
+                  /blog/{post.slug}
+                </span>
+                <span className="text-muted/50">suggested permalink</span>
+              </div>
+
+              <h2 className="mt-5 text-[26px] font-semibold leading-[1.2] tracking-[-0.02em] text-ink sm:text-[34px]">
+                {post.title}
+              </h2>
+
+              {/* Meta description */}
+              <div className="mt-6 rounded-xl border border-line bg-black/25 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10.5px] uppercase tracking-[0.14em] text-muted">
+                    Meta description
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCopyMeta}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] text-muted transition hover:bg-white/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    <CopyIcon />
+                    {copyFeedback === "meta"
+                      ? "Copied"
+                      : copyFeedback === "error"
+                        ? "Failed"
+                        : "Copy"}
+                  </button>
+                </div>
+                <p className="mt-2 text-[13px] leading-6 text-[#C8C8D0]">
+                  {post.metaDescription}
+                </p>
+                <p className="mt-2 font-mono text-[10px] text-muted/60">
+                  {post.metaDescription.length} chars · target ≤ 160
+                </p>
+              </div>
+
+              <div className="mt-8">
+                <p className="whitespace-pre-wrap text-[15.5px] leading-[1.85] text-[#D6D6DC]">
+                  {post.intro}
+                </p>
+
+                {post.sections.map((section) => (
+                  <section key={section.heading} className="mt-9">
+                    <h3 className="text-[18px] font-semibold tracking-[-0.01em] text-ink">
+                      {section.heading}
+                    </h3>
+                    <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-[1.85] text-[#B6B6C0]">
+                      {section.body}
+                    </p>
+                  </section>
+                ))}
+
+                <div className="mt-10 rounded-xl border-l-2 border-accent/60 bg-white/[0.025] px-5 py-4">
+                  <p className="text-[10.5px] uppercase tracking-[0.14em] text-muted">
+                    Final thought
+                  </p>
+                  <p className="mt-2 whitespace-pre-wrap text-[14.5px] leading-[1.8] text-[#D6D6DC]">
+                    {post.conclusion}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3.5 sm:px-8">
+              <p className="font-mono text-[10.5px] text-muted/60">
+                source · youtube.com/watch?v={post.videoId}
+              </p>
+              <p className="text-[10.5px] text-muted/60">
+                AI draft · edit before publishing
+              </p>
+            </div>
+          </article>
+        )}
+
+        {/* Footer */}
+        <footer className="mt-16 flex flex-col gap-2 border-t border-line pt-6 text-[11px] text-muted/70 sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            Live output via{" "}
+            <code className="font-mono text-muted">/api/generate</code> · key
+            stays server-side
+          </p>
+          <p className="font-mono">Next.js · Tailwind CSS</p>
+        </footer>
+      </div>
+    </main>
+  );
+}
