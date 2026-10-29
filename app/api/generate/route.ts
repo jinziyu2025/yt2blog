@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { createProxyFetch, getProxyCandidates } from "@/lib/youtube-proxy";
 import {
   YoutubeTranscript,
   YoutubeTranscriptDisabledError,
@@ -47,18 +48,31 @@ const LOG_PREFIX_STREAM = "[stream]";
 const LOG_PREFIX_PERSONA = "[persona]";
 const LOG_PREFIX_STYLE = "[style]";
 
-// Optional outbound proxy for YouTube. Node's global fetch ignores HTTP(S)_PROXY,
-// so when YOUTUBE_PROXY is set we route caption requests through an undici
-// ProxyAgent. Leave it unset on hosts that can reach YouTube directly.
+// YouTube captions are fetched through the free proxy pool (lib/youtube-proxy).
+// Node's global fetch ignores HTTP(S)_PROXY, so each candidate gets its own
+// undici ProxyAgent. YOUTUBE_PROXY, when set, is kept as the final fallback.
 const YOUTUBE_PROXY = process.env.YOUTUBE_PROXY?.trim() ?? "";
-const proxyAgent = YOUTUBE_PROXY ? new ProxyAgent(YOUTUBE_PROXY) : null;
+const staticProxyAgent = YOUTUBE_PROXY ? new ProxyAgent(YOUTUBE_PROXY) : null;
 
 const transcriptFetch = (
-  proxyAgent
+  staticProxyAgent
     ? (input: Parameters<typeof undiciFetch>[0], init?: Parameters<typeof undiciFetch>[1]) =>
-        undiciFetch(input, { ...init, dispatcher: proxyAgent })
+        undiciFetch(input, { ...init, dispatcher: staticProxyAgent })
     : fetch
 ) as typeof fetch;
+
+// How many random free proxies to try per language before giving up.
+const PROXY_ATTEMPTS = Math.max(
+  1,
+  Number.parseInt(process.env.YOUTUBE_PROXY_ATTEMPTS?.trim() ?? "3", 10) || 3
+);
+
+// A dead free proxy usually fails fast or hangs. Keep each attempt short so the
+// retries cost seconds, not minutes.
+const PROXY_ATTEMPT_TIMEOUT_MS = Math.max(
+  3_000,
+  Number.parseInt(process.env.YOUTUBE_PROXY_TIMEOUT_MS?.trim() ?? "10000", 10) || 10_000
+);
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -242,132 +256,176 @@ async function fetchEnglishTranscript(videoId: string): Promise<TranscriptResult
   const languages = ["en", "en-US", "en-GB"];
   let lastLanguageError: { message: string; langs: string[] } | null = null;
 
-  for (const lang of languages) {
-    try {
-      const segments = await Promise.race([
-        YoutubeTranscript.fetchTranscript(videoId, { lang, fetch: transcriptFetch }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error("TRANSCRIPT_TIMEOUT")),
-            TRANSCRIPT_TIMEOUT_MS
-          )
-        ),
-      ]);
+  // Random free proxies first, then the configured YOUTUBE_PROXY (appended by
+  // the pool), and finally a direct request when no static proxy is configured.
+  const candidates = await getProxyCandidates(PROXY_ATTEMPTS);
+  const routes: Array<string | null> =
+    candidates.length > 0
+      ? YOUTUBE_PROXY
+        ? candidates
+        : [...candidates, null]
+      : [null];
+  // A proxy that died on one language is dropped for the remaining languages.
+  const activeRoutes = routes.slice();
+  const deadProxies = new Set<string>();
+  let transient: { status: number; message: string } | null = null;
+  let attempts = 0;
 
-      if (!segments || segments.length === 0) {
-        continue;
-      }
+  langLoop: for (const lang of languages) {
+    for (const proxyUrl of activeRoutes.filter(
+      (item) => item === null || !deadProxies.has(item)
+    )) {
+      attempts += 1;
+      const fetchImpl = proxyUrl ? createProxyFetch(proxyUrl) : transcriptFetch;
+      const label = proxyUrl
+        ? `proxy=${new URL(proxyUrl).host}`
+        : YOUTUBE_PROXY
+          ? "proxy=static"
+          : "proxy=direct";
+      const attemptTimeoutMs = proxyUrl ? PROXY_ATTEMPT_TIMEOUT_MS : TRANSCRIPT_TIMEOUT_MS;
 
-      const text = cleanTranscript(segments);
-      if (!text) continue;
+      try {
+        const segments = await Promise.race([
+          YoutubeTranscript.fetchTranscript(videoId, { lang, fetch: fetchImpl }),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("TRANSCRIPT_TIMEOUT")),
+              attemptTimeoutMs
+            )
+          ),
+        ]);
 
-      const truncated = truncateTranscript(text);
-      const fetchMs = Date.now() - fetchStartedAt;
+        if (!segments || segments.length === 0) {
+          transient = {
+            status: 502,
+            message: "YouTube returned an empty caption list.",
+          };
+          continue;
+        }
 
-      console.log(
-        `${LOG_PREFIX_TRANSCRIPT} ok videoId=${videoId} lang=${lang} segments=${
-          segments.length
-        } chars=${text.length} injectedChars=${truncated.length} truncated=${
-          truncated.length !== text.length
-        } fetchMs=${fetchMs} proxy=${proxyAgent ? "on" : "off"}`
-      );
+        const text = cleanTranscript(segments);
+        if (!text) continue;
 
-      return {
-        ok: true,
-        text: truncated,
-        lang,
-        segments: segments.length,
-        originalChars: text.length,
-      };
-    } catch (caught) {
-      if (caught instanceof YoutubeTranscriptNotAvailableLanguageError) {
-        // The published type only exposes `message`; the available language list
-        // is embedded as "Available languages: en, de, ..." in that message.
-        const message = caught.message;
-        const match = /Available languages:\s*(.*)$/i.exec(message);
-        const available = match
-          ? match[1]
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean)
-          : [];
-        lastLanguageError = { message, langs: available };
+        const truncated = truncateTranscript(text);
+        const fetchMs = Date.now() - fetchStartedAt;
+
         console.log(
-          `${LOG_PREFIX_TRANSCRIPT} no lang=${lang} videoId=${videoId} available=${available.join(",") || "none"}`
+          `${LOG_PREFIX_TRANSCRIPT} ok videoId=${videoId} lang=${lang} segments=${
+            segments.length
+          } chars=${text.length} injectedChars=${truncated.length} truncated=${
+            truncated.length !== text.length
+          } fetchMs=${fetchMs} attempts=${attempts} ${label}`
         );
+
+        return {
+          ok: true,
+          text: truncated,
+          lang,
+          segments: segments.length,
+          originalChars: text.length,
+        };
+      } catch (caught) {
+        if (caught instanceof YoutubeTranscriptNotAvailableLanguageError) {
+          // The published type only exposes `message`; the available language list
+          // is embedded as "Available languages: en, de, ..." in that message.
+          const message = caught.message;
+          const match = /Available languages:\s*(.*)$/i.exec(message);
+          const available = match
+            ? match[1]
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean)
+            : [];
+          lastLanguageError = { message, langs: available };
+          console.log(
+            `${LOG_PREFIX_TRANSCRIPT} no lang=${lang} videoId=${videoId} available=${available.join(",") || "none"} ${label}`
+          );
+          // The video simply has no captions in this language: another proxy
+          // would return the same answer, so move on to the next language.
+          continue langLoop;
+        }
+
+        if (caught instanceof YoutubeTranscriptTooManyRequestError) {
+          console.log(
+            `${LOG_PREFIX_TRANSCRIPT} rate-limited videoId=${videoId} ${label} attempts=${attempts}`
+          );
+          transient = {
+            status: 429,
+            message:
+              "YouTube is temporarily rate-limiting transcript requests. Wait a minute or two, then try again.",
+          };
+          if (proxyUrl) deadProxies.add(proxyUrl);
+          continue;
+        }
+
+        if (caught instanceof YoutubeTranscriptVideoUnavailableError) {
+          console.log(`${LOG_PREFIX_TRANSCRIPT} unavailable videoId=${videoId} ${label}`);
+          return {
+            ok: false,
+            status: 404,
+            message:
+              "This YouTube video is unavailable (private, removed, or region-locked). Try a different link.",
+          };
+        }
+
+        if (caught instanceof YoutubeTranscriptDisabledError) {
+          console.log(`${LOG_PREFIX_TRANSCRIPT} disabled videoId=${videoId} ${label}`);
+          return {
+            ok: false,
+            status: 422,
+            message:
+              "Captions are disabled for this video, so no transcript is available. Try a video with captions enabled.",
+          };
+        }
+
+        if (caught instanceof YoutubeTranscriptNotAvailableError) {
+          console.log(`${LOG_PREFIX_TRANSCRIPT} not-available videoId=${videoId} ${label}`);
+          return {
+            ok: false,
+            status: 422,
+            message:
+              "No captions were found for this video. Try a video that has captions enabled.",
+          };
+        }
+
+        const raw = caught instanceof Error ? caught.message : String(caught);
+
+        if (raw === "TRANSCRIPT_TIMEOUT") {
+          console.log(
+            `${LOG_PREFIX_TRANSCRIPT} timeout videoId=${videoId} ${label} after=${attemptTimeoutMs}ms attempts=${attempts}`
+          );
+          transient = {
+            status: 504,
+            message: `Timed out after ${Math.round(attemptTimeoutMs / 1000)}s while fetching YouTube captions. Try again.`,
+          };
+          if (proxyUrl) deadProxies.add(proxyUrl);
+          continue;
+        }
+
+        if (/consent|blocked|forbidden|captcha|sign in|confirm your age/i.test(raw)) {
+          console.log(
+            `${LOG_PREFIX_TRANSCRIPT} blocked videoId=${videoId} ${label} message=${raw.slice(0, 120)}`
+          );
+          transient = {
+            status: 502,
+            message:
+              "YouTube refused the transcript request (consent, bot check, or access restriction). Try again later or from another network.",
+          };
+          if (proxyUrl) deadProxies.add(proxyUrl);
+          continue;
+        }
+
+        // A dead or blocked free proxy fails here; try the next candidate.
+        console.log(
+          `${LOG_PREFIX_TRANSCRIPT} attempt-failed videoId=${videoId} ${label} attempts=${attempts} message=${raw.slice(0, 120)}`
+        );
+        transient = {
+          status: 502,
+          message: `Could not fetch the YouTube transcript: ${raw.slice(0, 200)}`,
+        };
+        if (proxyUrl) deadProxies.add(proxyUrl);
         continue;
       }
-
-      if (caught instanceof YoutubeTranscriptTooManyRequestError) {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} rate-limited videoId=${videoId}`);
-        return {
-          ok: false,
-          status: 429,
-          message:
-            "YouTube is temporarily rate-limiting transcript requests. Wait a minute or two, then try again.",
-        };
-      }
-
-      if (caught instanceof YoutubeTranscriptVideoUnavailableError) {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} unavailable videoId=${videoId}`);
-        return {
-          ok: false,
-          status: 404,
-          message:
-            "This YouTube video is unavailable (private, removed, or region-locked). Try a different link.",
-        };
-      }
-
-      if (caught instanceof YoutubeTranscriptDisabledError) {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} disabled videoId=${videoId}`);
-        return {
-          ok: false,
-          status: 422,
-          message:
-            "Captions are disabled for this video, so no transcript is available. Try a video with captions enabled.",
-        };
-      }
-
-      if (caught instanceof YoutubeTranscriptNotAvailableError) {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} not-available videoId=${videoId}`);
-        return {
-          ok: false,
-          status: 422,
-          message:
-            "No captions were found for this video. Try a video that has captions enabled.",
-        };
-      }
-
-      const raw = caught instanceof Error ? caught.message : String(caught);
-
-      if (raw === "TRANSCRIPT_TIMEOUT") {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} timeout videoId=${videoId}`);
-        return {
-          ok: false,
-          status: 504,
-          message: `Timed out after ${TRANSCRIPT_TIMEOUT_MS / 1000}s while fetching YouTube captions. Try again.`,
-        };
-      }
-
-      if (/consent|blocked|forbidden|captcha|sign in|confirm your age/i.test(raw)) {
-        console.log(`${LOG_PREFIX_TRANSCRIPT} blocked videoId=${videoId} message=${raw.slice(0, 120)}`);
-        return {
-          ok: false,
-          status: 502,
-          message:
-            "YouTube refused the transcript request (consent, bot check, or access restriction). Try again later or from another network.",
-        };
-      }
-
-      console.log(
-        `${LOG_PREFIX_TRANSCRIPT} error videoId=${videoId} message=${raw.slice(0, 160)}`
-      );
-
-      return {
-        ok: false,
-        status: 502,
-        message: `Could not fetch the YouTube transcript: ${raw.slice(0, 200)}`,
-      };
     }
   }
 
@@ -377,6 +435,20 @@ async function fetchEnglishTranscript(videoId: string): Promise<TranscriptResult
       ok: false,
       status: 422,
       message: `This video has no English captions available (available: ${available}). Try a video with English subtitles.`,
+    };
+  }
+
+  // Every proxy candidate (and the direct fallback) failed for every language.
+  if (transient) {
+    console.log(
+      `${LOG_PREFIX_TRANSCRIPT} exhausted videoId=${videoId} attempts=${attempts} status=${transient.status} elapsedMs=${Date.now() - fetchStartedAt}`
+    );
+    return {
+      ok: false,
+      status: transient.status,
+      message: `${transient.message} (tried ${attempts} ${
+        attempts === 1 ? "route" : "routes"
+      }: ${routes.length} proxy candidate${routes.length === 1 ? "" : "s"}).`,
     };
   }
 
