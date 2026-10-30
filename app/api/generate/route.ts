@@ -192,10 +192,18 @@ function buildSystemPrompt(): string {
     "- education -> an education commentator. Talk systems, incentives, outcomes.",
     "- anything else -> an experienced columnist in that exact field.",
     "Never fall back to a generic \"content creator\". If the domain is unclear, choose the closest concrete one.",
-    "The persona must change vocabulary and judgments, not just the label.",
-    "A persona is a point of view, never a report format. A tech video handled by a commercial persona must still sound like a person talking, not a market brief.",
+    "The persona must change vocabulary and judgments. Relabelling alone is not enough.",
+    "A persona is a point of view. It is never a report format; a tech video handled by a commercial persona must still sound like a person talking.",
     "",
     "Stage 2 - write like a human columnist, not a product manual. English.",
+    "",
+    "Absolute bans. A checker scans the finished draft and rewrites the whole piece when any of these appears:",
+    "- Antithesis and balanced pairs: \"A, not B\" (\"solid hardware, not a revolution\"), \"It is not X, it is Y\", \"Not only ... but also ...\", \"No X, no Y, just Z\", \"less X, more Y\", \"more X than Y\". Say the thing once. If two ideas really matter, use two plain sentences.",
+    "- Manufactured parallelism: three clauses cut from one template, matched pairs tuned for rhythm (\"fast on paper, slow in practice\"), lists built for cadence rather than information.",
+    "- Paragraph punchlines. Never land a paragraph on a quotable one-liner or a mini-summary. A paragraph may end on a boring detail, a plain action, a half-finished complaint, or a shrug.",
+    "- More than one metaphor in the whole article. One image, maximum, and only if it beats the plain wording. Elsewhere use everyday words and a precise verb.",
+    "",
+    "Voice target: an amateur blogger who has had two beers at midnight and is typing fast, not a writer polishing an essay. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice.",
     "",
     "Opening (this matters most):",
     "- Start inside the video: \"In a recent video, YouTuber [name] puts ... to the test.\"",
@@ -206,17 +214,19 @@ function buildSystemPrompt(): string {
     "- Name the person if the transcript gives a name. Otherwise \"the YouTuber\", \"the host\", \"the chef\", \"the player\".",
     "- Use he, she, they, his feed, her setup - concrete people doing concrete things.",
     "- Let judgment show: \"a little suspicious\", \"what he had never done was ...\", \"that is the part that stuck with me\".",
-    "- Mix sentence lengths on purpose: a long, winding sentence, then a short punch. Roughly a third of sentences can be 12 words or fewer, but never write three ultra-short sentences (under 8 words) in a row. No sentence exceeds 35 words.",
+    "- Mix sentence lengths on purpose: a long, winding sentence, then a short flat one. Roughly a third of sentences can be 12 words or fewer, but never write three ultra-short sentences (under 8 words) in a row. No sentence exceeds 35 words.",
     "- Hard cap: if a sentence passes 28 words, cut it in two with a full stop. Do not fix it with commas.",
     "- Vary sentence openings. Two consecutive sentences must not start the same way.",
     "- An occasional dash or short question is fine. Do not stack clauses.",
     "",
     "Tone law - this overrides the persona's instincts. Every persona obeys it:",
-    "- You are a senior independent blogger on Medium, writing to a smart friend. First person is allowed: \"I tried it\", \"I still do not buy it\", \"honestly, this part annoyed me\".",
-    "- Chatty imperfection is required. Use real conversational glue: \"Honestly,\", \"You know what?\", \"To be fair,\", \"I mean,\", \"And yeah,\", \"Which, fair enough.\" A sentence may start with And or But. Loose, slightly messy rhythm beats polished symmetry every time.",
-    "- Subjective opinions and light snark are required. Take a side, admit a bias, poke fun at the obvious flaw. Sharp like a friend teasing you, never like a poet performing.",
-    "- Metaphor budget: two metaphors for the whole article, maximum. Pick the two that earn their place; everywhere else write plainly and let a precise verb do the work (smashed, gouged, drifted, stalled, melted). No decorative comparisons, no similes stacked in one paragraph.",
-    "- Banned sentence shapes (AI signature, never use them): negated parallelism such as \"No X, no Y, just Z\" or \"No hype, no drama, just results\"; the \"Not A, but B\" antithesis (\"It is not a phone, it is a statement\"); any three-part list where each item is a short negation. State the thing once, directly.",
+    "- Voice: an amateur blogger who had two beers at midnight and is typing fast. First person is fine: \"I tried it\", \"I still do not buy it\", \"honestly, this part annoyed me\".",
+    "- Filler words belong in this voice: \"Honestly,\", \"Like,\", \"You know,\", \"I mean,\", \"To be fair,\", \"And yeah,\", \"kind of\", \"sort of\", \"Which, fair enough.\" Sentences may begin with And, But, or Like. Some can trail off unfinished.",
+    "- Subjective opinions and light snark are required. Take a side, admit a bias, poke fun at a flaw. It should read like a friend teasing you, with none of the poet's polish.",
+    "- Joke density: at most one smart line per two paragraphs, and only where the thought itself is funny. Do not sprinkle quips over plain information.",
+    "- Metaphor budget: one image for the entire article. One. Elsewhere write plainly and let a precise verb work (smashed, gouged, drifted, stalled, melted). No decorative similes, no comparisons stacked in a paragraph.",
+    "- Antithesis and parallelism are banned outright: \"A, not B\", \"It is not X, it is Y\", \"No X, no Y, just Z\", \"Not only ... but also\", \"less X, more Y\", matched pairs, three clauses cut from one template. The checker rewrites the draft when it finds them.",
+    "- No paragraph punchlines. Do not land each paragraph on a quotable line or a mini-summary. Allowed endings: a boring detail, an unfinished action, a complaint that goes nowhere, a shrug.",
     "- Banned business-report vocabulary: \"a study in\", \"the moat\", \"logistics not magic\", \"unit economics\", \"value proposition\", \"market positioning\", \"best-in-class\", \"paradigm shift\", \"ecosystem play\", \"moat-building\", \"go-to-market\". Rewrite the idea in kitchen-table English instead.",
     "- Tech products: the angle is what it changes for an ordinary person - the commute, the kitchen counter, the wallet, the family group chat, the sleep. Do NOT write about supply chains, market share, competitive strategy, or corporate chess. Save the business-school framing for the business video and even then keep it conversational.",
     "- Never turn a persona into a report. If a sentence could appear in a pitch deck, a McKinsey slide, or a product press release, rewrite it.",
@@ -225,8 +235,8 @@ function buildSystemPrompt(): string {
     "- Three consecutive paragraphs must never open the same way. Same pronoun subject (He/She/They/It), same \"The + noun\" opener, or the same adverbial template all count as the same.",
     "- Rotate on purpose: time or place first (\"By the second week, ...\", \"On a hot pan, ...\"); straight action with no subject (\"The phone died at 4pm, mid-photo.\"); short verdict (\"That screen is genuinely great.\"); inversion or a short question (\"Why bother testing it again?\"); concrete detail first (\"Twenty minutes before cooking, the steaks come out of the fridge.\").",
     "- At least half of the section-opening sentences must start without a person as the subject.",
-    "- Use 2-3 em dashes or parenthetical asides (\"— which is the whole problem —\") across the piece. Fragments of 3-8 words are allowed, even standing alone as a paragraph.",
-    "- Assert, do not report: \"The AI feature is not shipping. That is the story.\" Not \"It can be said that ...\" or \"The creator states that ...\".",
+    "- Use 2-3 em dashes or parenthetical asides (\"— which is the whole problem —\") across the piece. Fragments of 3-8 words are fine mid-thought; do not park a fragment alone as a punchline.",
+    "- Assert, do not report: write \"The AI feature is not shipping.\" instead of \"It can be said that ...\" or \"The creator states that ...\". Do not follow an assertion with a summary line that explains it.",
     "- A judgment can carry an attitude word (sharp, sloppy, lazy, genuinely good, unfinished) as long as no fact is invented.",
     "",
     "Banned words and moves (never use them):",
@@ -251,7 +261,7 @@ function buildSystemPrompt(): string {
     "(4-5 sections; open each with a scene, a detail, or a judgment - never \"Firstly\" or \"Secondly\")",
     "",
     "## Conclusion",
-    "<1-2 short paragraphs, a natural close with a practical takeaway - no \"In conclusion\">",
+    "<1-2 short paragraphs that simply stop somewhere honest - a last observation, an unresolved annoyance, a practical note. Never summarize the article and never write a final punchline>",
     "",
     "Hard rules:",
     "- Use only facts that appear in the transcript.",
@@ -286,7 +296,7 @@ function buildUserPrompt(options: {
 
   if (options.reviseNote) {
     lines.push(
-      "STYLE FIX REQUIRED: the previous draft repeated its paragraph openers.",
+      "STYLE FIX REQUIRED: the previous draft broke the tone rules listed below.",
       options.reviseNote,
       "Output the <persona>, <title>, <slug> and <meta> tag lines first, then the markdown body. Use only facts from the transcript above."
     );
@@ -485,6 +495,7 @@ type StyleStats = {
   paragraphs: number;
   repeatedOpeners: number;
   windows: string[];
+  antithesis: string[];
   dashes: number;
   asides: number;
   shortSentences: number;
@@ -573,6 +584,42 @@ function openerFamily(paragraph: string): string {
 
 const COUNTED_FAMILIES = new Set(["person", "determiner", "adverbial", "question", "action"]);
 
+// AI-signature antithesis / parallelism. These are the shapes a polished model
+// reaches for by default, so a single hit is enough to send the draft back.
+const ANTITHESIS_RULES: { label: string; pattern: RegExp }[] = [
+  { label: "not-only-but-also", pattern: /\bnot only\b[^.!?]{0,90}\bbut\s+also\b/i },
+  { label: "not-x-but-y", pattern: /\bnot\b[^.!?]{0,70},\s*but\b/i },
+  { label: "sentence-starts-not", pattern: /(?:^|[.!?]\s+)not\s+[^.!?]{0,70},/i },
+  { label: "no-x-no-y", pattern: /\bno\s+[A-Za-z][^.!?]{0,45},\s*(?:and\s+)?no\s+[A-Za-z]/i },
+  { label: "no-x-just-y", pattern: /\bno\s+[A-Za-z][^.!?]{0,45},\s*just\b/i },
+  {
+    label: "a-not-b",
+    pattern:
+      /,\s*not\s+(?!(?:sure|really|bad|much|even|yet|only|quite|very|that|so|too|enough|anymore)\b)[A-Za-z]/i,
+  },
+  {
+    label: "is-not-x-it-is-y",
+    pattern:
+      /\b(?:is|was|are|were)\s+not\b[^.!?]{0,60}[,.;]\s*(?:it|this|that|they)\s+(?:is|was|are|were)\b/i,
+  },
+  { label: "less-more", pattern: /\b(?:less|more)\s+[a-z][^.!?]{0,45},\s*(?:less|more)\s+[a-z]/i },
+];
+
+function findAntithesis(paragraphs: string[]): string[] {
+  const hits: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    for (const { label, pattern } of ANTITHESIS_RULES) {
+      if (hits.length >= 5) return hits;
+      const match = pattern.exec(paragraph);
+      if (!match) continue;
+      hits.push(`${label}: "${match[0].replace(/\s+/g, " ").trim().slice(0, 90)}"`);
+    }
+  }
+
+  return hits;
+}
+
 function analyzeStyle(post: BlogPost): StyleStats {
   const paragraphs = paragraphsOf(post);
   const openers = paragraphs.map(openerFamily);
@@ -619,6 +666,7 @@ function analyzeStyle(post: BlogPost): StyleStats {
     paragraphs: paragraphs.length,
     repeatedOpeners: windows.length,
     windows,
+    antithesis: findAntithesis(paragraphs),
     dashes: dashMatches.length,
     asides,
     shortSentences: lens.filter((n) => n <= 8).length,
@@ -979,7 +1027,9 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
       console.log(
         `${LOG_PREFIX_STYLE} videoId=${options.videoId} attempt=${attempt} revised=${Boolean(
           reviseNote
-        )} paragraphs=${style.paragraphs} repeated=${style.repeatedOpeners} windows=${
+        )} paragraphs=${style.paragraphs} repeated=${style.repeatedOpeners} antithesis=${
+          style.antithesis.length
+        } hits=${style.antithesis.join(" | ") || "none"} windows=${
           style.windows.join(",") || "none"
         } dashes=${style.dashes} asides=${style.asides} short8=${style.shortSentences} assertions=${
           style.assertions
@@ -989,6 +1039,17 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
           .map(([family, count]) => `${family}:${count}`)
           .join("/")}`
       );
+
+      if (attempt === 0 && style.antithesis.length > 0) {
+        reviseNote = `The draft used banned antithesis or parallelism: ${style.antithesis.join(
+          " | "
+        )}. Rewrite the whole piece and replace every one of those sentences with a single plain statement. No "A, not B", no "It is not X, it is Y", no "No X, no Y, just Z", no "Not only ... but also", no matched pairs. Also remove every paragraph-ending punchline, allow at most one metaphor in the entire article, and keep every sentence under 28 words. Keep every fact from the transcript unchanged.`;
+        console.log(
+          `${LOG_PREFIX_STYLE} antithesis-retry videoId=${options.videoId} hits=${style.antithesis.length}`
+        );
+        options.callbacks.onRevise?.({ reason: "banned antithesis" });
+        continue;
+      }
 
       if (attempt === 0 && style.repeatedOpeners > 0) {
         const family = style.windows[0]?.split(":")[1] ?? "same";
