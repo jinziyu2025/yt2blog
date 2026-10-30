@@ -18,7 +18,7 @@ export default function PrivacyPage() {
           heading: "Information We Collect",
           paragraphs: [
             "Usage data: when you generate a draft we process the YouTube URL you submit and the resulting article text. We do not require an account to use the free tier.",
-            "Local storage: your free-generation counter is stored in your browser’s localStorage under a single key. It never leaves your device unless you clear it.",
+            "Local storage: your free-generation counter is stored in your browser’s localStorage under the key “yt2blog:generations-used”. If you arrive through an affiliate link containing a ref code, that code is stored for up to 30 days under “yt2blog:affiliate-ref” so the referring partner can be credited. Both values stay on your device.",
             "Payment data: if you subscribe, our payment provider Paddle collects your name, email address, billing address and payment details. We never see or store your full card number.",
             "Technical logs: our hosting provider records standard server logs such as IP address, user agent, timestamps and error codes for security and troubleshooting.",
           ],
@@ -33,7 +33,7 @@ export default function PrivacyPage() {
         {
           heading: "Cookies and Local Storage",
           paragraphs: [
-            "YT2Blog itself sets no advertising or tracking cookies. We use localStorage to remember how many free generations you have used. This is strictly functional and necessary to operate the free tier.",
+            "YT2Blog itself sets no advertising or tracking cookies. We use localStorage to remember how many free generations you have used and, when you arrive through a partner link, the affiliate ref code for up to 30 days. Both entries are strictly functional and necessary to operate the free tier and attribution.",
             "Paddle may set cookies during checkout to process payments, prevent fraud and remember your session. Their use of cookies is governed by Paddle’s own privacy and cookie notices.",
             "See our Cookie Policy for details and for instructions on how to clear or block cookies and local storage.",
           ],

@@ -23,7 +23,7 @@ export default function CookiesPage() {
         {
           heading: "Cookies and Storage We Use",
           paragraphs: [
-            "Functional storage — we use a single localStorage entry, “yt2blog:generations-used”, to count how many free blog drafts you have generated. It contains a number only, no personal identifiers, and is required for the free tier to work.",
+            "Functional storage — we use two localStorage entries. “yt2blog:generations-used” counts how many free blog drafts you have generated. “yt2blog:affiliate-ref” stores a partner ref code for up to 30 days so that the referring partner can be credited if you subscribe. Both contain no personal identifiers and are required for the free tier and attribution to work.",
             "Paddle checkout cookies — when you click “Pay with Credit Card”, our payment provider Paddle may set cookies on the checkout page. These are used to process your payment securely, prevent fraud and maintain your session. They are only set once you enter the checkout flow.",
             "We do not set analytics, advertising or social media cookies.",
           ],
