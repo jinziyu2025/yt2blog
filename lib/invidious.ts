@@ -14,23 +14,21 @@
 
 const LOG_PREFIX = "[mirror]";
 
-const CAPTION_LIST_TIMEOUT_MS = 8_000;
-const CAPTION_TEXT_TIMEOUT_MS = 10_000;
-const STREAM_TIMEOUT_MS = 12_000;
-const TOTAL_BUDGET_MS = 40_000;
+// Fail fast: a dead mirror should cost a few seconds, not the whole request.
+// Every request also stops starting new attempts once TOTAL_BUDGET_MS is used,
+// so DeepSeek still has time to write the article.
+const CAPTION_LIST_TIMEOUT_MS = 3_000;
+const CAPTION_TEXT_TIMEOUT_MS = 3_000;
+const STREAM_TIMEOUT_MS = 3_000;
+const TOTAL_BUDGET_MS = 20_000;
 
 const DEFAULT_INVIDIOUS_INSTANCES = [
   "https://inv.nadeko.net",
-  "https://yewtu.be",
   "https://invidious.nerdvpn.de",
-  "https://invidious.f5.si",
+  "https://invidious.tiekoetter.com",
 ];
 
-const DEFAULT_PIPED_INSTANCES = [
-  "https://api.piped.private.coffee",
-  "https://pipedapi.kavin.rocks",
-  "https://pipedapi.adminforge.de",
-];
+const DEFAULT_PIPED_INSTANCES = ["https://pipedapi.kavin.rocks"];
 
 // Keep the transcript within a sane token budget before injecting it.
 const MAX_TRANSCRIPT_CHARS = 14_000;
