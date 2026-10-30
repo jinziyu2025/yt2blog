@@ -1,4 +1,5 @@
 import Link from "next/link";
+import AffiliateBadge from "@/components/affiliate-badge";
 
 const LEGAL_LINKS = [
   { href: "/terms", label: "Terms of Service" },
@@ -75,9 +76,14 @@ export default function SiteFooter() {
           </div>
         </div>
 
-        <div className="mt-8 flex flex-col gap-2 border-t border-line pt-6 text-[10.5px] text-muted/50 sm:flex-row sm:items-center sm:justify-between">
-          <p>© 2026 YT2Blog. All rights reserved.</p>
-          <p className="font-mono">Payments processed by Paddle</p>
+        <div className="mt-8 border-t border-line pt-6">
+          <div className="flex flex-col gap-2 text-[10.5px] text-muted/50 sm:flex-row sm:items-center sm:justify-between">
+            <p>© 2026 YT2Blog. All rights reserved.</p>
+            <p className="font-mono">Payments processed by Paddle</p>
+          </div>
+          <div className="mt-1.5">
+            <AffiliateBadge />
+          </div>
         </div>
       </div>
     </footer>

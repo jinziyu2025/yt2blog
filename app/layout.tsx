@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import AffiliateTracker from "@/components/affiliate-tracker";
 import SiteFooter from "@/components/site-footer";
 import "./globals.css";
 
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="bg-canvas font-sans text-ink antialiased">
+        <AffiliateTracker />
         <div className="flex min-h-screen flex-col">
           <div className="flex-1">{children}</div>
           <SiteFooter />

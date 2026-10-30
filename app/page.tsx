@@ -3,6 +3,8 @@
 import Link from "next/link";
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
+import { getAffiliateRef } from "@/lib/affiliate";
+import { startPaddleCheckout } from "@/lib/paddle";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -465,6 +467,18 @@ function PaywallModal({
 
   if (!open) return null;
 
+  async function handlePay() {
+    setRedirecting(true);
+
+    try {
+      // Forward the saved affiliate ref into Paddle's customData.
+      const mode = await startPaddleCheckout(getAffiliateRef());
+      if (mode === "paddle") onClose();
+    } catch {
+      // Paddle.js failed to load: keep the placeholder notice visible.
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
@@ -556,7 +570,7 @@ function PaywallModal({
             <button
               type="button"
               disabled={!agreed}
-              onClick={() => setRedirecting(true)}
+              onClick={() => void handlePay()}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-[13.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:bg-[#2A2A31] disabled:text-muted/60 disabled:hover:bg-[#2A2A31]"
             >
               Pay with Credit Card
