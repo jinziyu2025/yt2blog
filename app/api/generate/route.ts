@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fetchEnglishTranscript } from "@/lib/invidious";
+import { fetchEnglishTranscript } from "@/lib/supadata";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ const MAX_TOKENS_FIRST = 8_000;
 const MAX_TOKENS_RETRY = 10_000;
 const MIN_ACCEPTABLE_WORDS = 600;
 
-// Transcript fetch + truncation live in lib/invidious.ts (Invidious mirrors).
+// Transcript fetch + truncation live in lib/supadata.ts (Supadata API).
 
 // No caching: every request fetches the real transcript and calls DeepSeek.
 // In-flight de-duplication below is memory-only (no disk writes).
