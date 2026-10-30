@@ -382,6 +382,16 @@ const GHOST_BUTTON =
 const SOLID_BUTTON =
   "inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
+// Rotating status copy shown in the article area while the pipeline runs.
+// One step every 3 seconds, looping until the first streamed character lands.
+const LOADING_STEPS = [
+  "Connecting and waking up server...",
+  "Fetching real YouTube subtitles...",
+  "Analyzing video content with AI...",
+  "Drafting SEO-friendly blog post...",
+  "Polishing English phrasing...",
+];
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
@@ -396,6 +406,7 @@ export default function HomePage() {
   const [streamMetaDescription, setStreamMetaDescription] = useState("");
   const [streamText, setStreamText] = useState("");
   const [reviseNotice, setReviseNotice] = useState("");
+  const [loadingStep, setLoadingStep] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
   const bufferRef = useRef("");
@@ -572,6 +583,19 @@ export default function HomePage() {
     if (box) box.scrollTop = box.scrollHeight;
   }, [streamText, status]);
 
+  // Rotate the progress copy every 3s while we are still waiting for the first
+  // byte from the server. Stops as soon as status flips to "streaming".
+  useEffect(() => {
+    if (status !== "loading") return;
+
+    setLoadingStep(0);
+    const timer = window.setInterval(() => {
+      setLoadingStep((previous) => (previous + 1) % LOADING_STEPS.length);
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [status]);
+
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -669,7 +693,7 @@ export default function HomePage() {
               <button
                 type="submit"
                 disabled={isGenerating}
-                className="group inline-flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 text-[14.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] active:bg-[#CFF036] disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:w-auto sm:min-w-[150px]"
+                className="group inline-flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 text-[14.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] active:bg-[#CFF036] disabled:cursor-not-allowed disabled:bg-[#2A2A31] disabled:text-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas sm:w-auto sm:min-w-[150px]"
               >
                 {isGenerating ? (
                   <>
@@ -784,25 +808,35 @@ export default function HomePage() {
               </div>
             </div>
 
-            {!streamTitle && !streamText && (
-              <>
-                <div className="mt-6 space-y-3">
-                  <div className="skeleton h-6 w-4/5" />
-                  <div className="skeleton h-3 w-2/5" />
+            {status === "loading" && !streamTitle && !streamText && (
+              <div className="mt-6 flex min-h-[190px] flex-col items-center justify-center gap-4 text-center">
+                <span className="grid h-9 w-9 place-items-center rounded-full border border-line bg-white/[0.03] text-accent">
+                  <Spinner />
+                </span>
+
+                <p
+                  key={loadingStep}
+                  className="animate-fade-up text-[14px] font-medium tracking-tight text-ink"
+                >
+                  {LOADING_STEPS[loadingStep]}
+                </p>
+
+                <div className="flex items-center gap-1.5" aria-hidden="true">
+                  {LOADING_STEPS.map((step, index) => (
+                    <span
+                      key={step}
+                      className={`h-1 w-7 rounded-full transition-colors duration-300 ${
+                        index === loadingStep ? "bg-accent" : "bg-white/10"
+                      }`}
+                    />
+                  ))}
                 </div>
 
-                <div className="mt-8 space-y-2.5">
-                  <div className="skeleton h-3 w-full" />
-                  <div className="skeleton h-3 w-11/12" />
-                  <div className="skeleton h-3 w-4/5" />
-                </div>
-
-                <div className="mt-7 space-y-2.5">
-                  <div className="skeleton h-4 w-1/3" />
-                  <div className="skeleton h-3 w-full" />
-                  <div className="skeleton h-3 w-10/12" />
-                </div>
-              </>
+                <p className="font-mono text-[10.5px] text-muted/60">
+                  step {loadingStep + 1} of {LOADING_STEPS.length} · the first
+                  draft can take up to a minute
+                </p>
+              </div>
             )}
 
             {streamTitle && (
