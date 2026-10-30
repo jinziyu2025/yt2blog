@@ -203,9 +203,11 @@ function buildSystemPrompt(): string {
     "- Anaphora runs: two sentences in a row opening with the same emphatic word (\"Nobody asked. Nobody cared.\"), or three in a row opening with the same word at all. Also banned: three consecutive sentences built on which / that / who clauses.",
     "- Definitional paragraph openers: never start a paragraph with a tidy summary sentence of the \"X is the oldest device\" / \"Y is the real problem\" shape. A paragraph may start mid-thought, with a dash, with an ellipsis, with half a sentence, with an action, or with a boring fact.",
     "- Paragraph punchlines. Never land a paragraph on a quotable one-liner or a mini-summary. A paragraph may end on a boring detail, a plain action, a half-finished complaint, or a shrug.",
+    "- Imperative or motto endings. Never close a paragraph, especially the last one, with advice of the \"Be picky about who you accept.\" / \"Choose quality over noise.\" / \"Don't settle for less.\" shape. The article can end flat, mid-thought, or on one concrete action (\"He closes the laptop and reheats the coffee.\").",
     "- More than one metaphor in the whole article. One image, maximum, and only if it beats the plain wording. Elsewhere use everyday words and a precise verb.",
     "",
-    "Voice target: an amateur blogger who has had two beers at midnight and is typing fast, not a writer polishing an essay. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice. Dashes (—) and ellipses (...) are welcome when a thought interrupts itself, so the text reads like someone typing while thinking.",
+    "Voice target: someone dictating a long voice message in a group chat and letting it transcribe, not a columnist filing copy. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice. Dashes (—) and ellipses (...) are welcome when a thought interrupts itself, so the text reads like someone typing while thinking.",
+    "Imperfection is the point: lists can be uneven in length, a list can switch grammatical shape halfway (two nouns, then a whole clause with \"because ...\"), and a slightly clunky spoken aside is fine. Do not tidy every sentence into the same mould.",
     "",
     "Opening (this matters most):",
     "- Start inside the video: \"In a recent video, YouTuber [name] puts ... to the test.\"",
@@ -231,6 +233,8 @@ function buildSystemPrompt(): string {
     "- Anaphora is banned: no \"Nobody... Nobody...\", no \"X... X... X...\", no three consecutive which / that / who clauses. The checker also rewrites for these.",
     "- Paragraph openings must not define or summarise. No \"Looping is the oldest device.\" Start mid-thought instead: \"Loops, honestly, are the reason I stopped watching at 20 minutes...\" or \"He loops the same four bars for eleven minutes.\"",
     "- No paragraph punchlines. Do not land each paragraph on a quotable line or a mini-summary. Allowed endings: a boring detail, an unfinished action, a complaint that goes nowhere, a shrug.",
+    "- No imperative or motto endings: no \"Be picky about who you accept.\", no \"Choose quality over noise.\", no closing advice at all. End flat, mid-thought, or on a concrete action.",
+    "- Uneven is good: let list items differ in shape and length, let one clause break the rhythm, let a spoken aside sit there without being cleaned up.",
     "- Banned business-report vocabulary: \"a study in\", \"the moat\", \"logistics not magic\", \"unit economics\", \"value proposition\", \"market positioning\", \"best-in-class\", \"paradigm shift\", \"ecosystem play\", \"moat-building\", \"go-to-market\". Rewrite the idea in kitchen-table English instead.",
     "- Tech products: the angle is what it changes for an ordinary person - the commute, the kitchen counter, the wallet, the family group chat, the sleep. Do NOT write about supply chains, market share, competitive strategy, or corporate chess. Save the business-school framing for the business video and even then keep it conversational.",
     "- Never turn a persona into a report. If a sentence could appear in a pitch deck, a McKinsey slide, or a product press release, rewrite it.",
@@ -265,7 +269,7 @@ function buildSystemPrompt(): string {
     "(4-5 sections; open each with a scene, a detail, or a judgment - never \"Firstly\" or \"Secondly\")",
     "",
     "## Conclusion",
-    "<1-2 short paragraphs that simply stop somewhere honest - a last observation, an unresolved annoyance, a practical note. Never summarize the article and never write a final punchline>",
+    "<1-2 short paragraphs that simply stop somewhere honest - a last observation, an unresolved annoyance, a small concrete action. Never summarize the article, never write a final punchline, and never close with imperative advice (\"Be picky about who you accept.\")>",
     "",
     "Hard rules:",
     "- Use only facts that appear in the transcript.",
@@ -502,6 +506,7 @@ type StyleStats = {
   antithesis: string[];
   anaphora: string[];
   definitional: string[];
+  motto: string[];
   dashes: number;
   asides: number;
   shortSentences: number;
@@ -698,6 +703,35 @@ function findDefinitionalOpeners(paragraphs: string[]): string[] {
   return hits;
 }
 
+// A paragraph that closes on bare advice reads like a slogan. Concrete actions
+// keep a subject ("He closes the laptop"), so a subjectless imperative at the
+// end of a paragraph is the signal.
+const MOTTO_VERBS = new Set([
+  "be", "don't", "do", "never", "always", "remember", "choose", "avoid", "stop",
+  "keep", "try", "think", "ask", "judge", "pick", "let", "make", "buy",
+]);
+
+const MOTTO_PHRASES =
+  /\b(?:all about|the lesson is|the takeaway|moral of (?:the|this) story|what matters is|that is the whole point)\b/i;
+
+function findMottoEndings(paragraphs: string[]): string[] {
+  const hits: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const sentences = splitSentences(paragraph);
+    const last = sentences[sentences.length - 1];
+    if (!last || wordsIn(last) > 14) continue;
+    // A question that happens to start with "Do" is not imperative advice.
+    if (last.includes("?")) continue;
+    if (!MOTTO_VERBS.has(firstWordOf(last)) && !MOTTO_PHRASES.test(last)) continue;
+
+    hits.push(`motto ending: "${last.slice(0, 70)}"`);
+    if (hits.length >= 4) break;
+  }
+
+  return hits;
+}
+
 function analyzeStyle(post: BlogPost): StyleStats {
   const paragraphs = paragraphsOf(post);
   const openers = paragraphs.map(openerFamily);
@@ -747,6 +781,7 @@ function analyzeStyle(post: BlogPost): StyleStats {
     antithesis: findAntithesis(paragraphs),
     anaphora: findAnaphora(paragraphs),
     definitional: findDefinitionalOpeners(paragraphs),
+    motto: findMottoEndings(paragraphs),
     dashes: dashMatches.length,
     asides,
     shortSentences: lens.filter((n) => n <= 8).length,
@@ -1109,8 +1144,10 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
           reviseNote
         )} paragraphs=${style.paragraphs} repeated=${style.repeatedOpeners} antithesis=${
           style.antithesis.length
-        } anaphora=${style.anaphora.length} definitional=${style.definitional.length} hits=${
-          [...style.antithesis, ...style.anaphora, ...(style.definitional.length >= 2 ? style.definitional : [])].join(" | ") || "none"
+        } anaphora=${style.anaphora.length} definitional=${style.definitional.length} motto=${
+          style.motto.length
+        } hits=${
+          [...style.antithesis, ...style.anaphora, ...style.motto, ...(style.definitional.length >= 2 ? style.definitional : [])].join(" | ") || "none"
         } windows=${
           style.windows.join(",") || "none"
         } dashes=${style.dashes} asides=${style.asides} short8=${style.shortSentences} assertions=${
@@ -1125,13 +1162,14 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
       const violations = [
         ...style.antithesis,
         ...style.anaphora,
+        ...style.motto,
         ...(style.definitional.length >= 2 ? style.definitional : []),
       ];
 
       if (attempt === 0 && violations.length > 0) {
         reviseNote = `The draft broke these hard rules: ${violations.join(
           " | "
-        )}. Rewrite the whole piece. Replace every listed sentence with one plain statement: no "A, not B", no "Nobody... Nobody...", no three consecutive which / who clauses, no three sentences starting with the same word. Do not open a paragraph with a definitional summary sentence ("X is the oldest device"); start mid-thought, with a dash, with an ellipsis, or with an action. Use dashes (—) and ellipses (...) where the thought breaks. Allow at most one metaphor, no paragraph punchlines, every sentence under 28 words, and keep every fact from the transcript unchanged.`;
+        )}. Rewrite the whole piece. Replace every listed sentence with one plain statement: no "A, not B", no "Nobody... Nobody...", no three consecutive which / who clauses, no three sentences starting with the same word. Do not open a paragraph with a definitional summary sentence ("X is the oldest device"); start mid-thought, with a dash, with an ellipsis, or with an action. Do not close any paragraph, especially the last one, with imperative advice ("Be picky about who you accept.") - end flat, mid-thought, or on a concrete action. Use dashes (—) and ellipses (...) where the thought breaks, let list items be uneven in shape, and allow one clunky spoken aside. Keep at most one metaphor, every sentence under 28 words, and every fact from the transcript unchanged.`;
         console.log(
           `${LOG_PREFIX_STYLE} violation-retry videoId=${options.videoId} hits=${violations.length}`
         );
