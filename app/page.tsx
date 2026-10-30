@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -392,6 +393,203 @@ const LOADING_STEPS = [
   "Polishing English phrasing...",
 ];
 
+// Free plan: two generations per browser, tracked in localStorage.
+const FREE_LIMIT = 2;
+const USAGE_STORAGE_KEY = "yt2blog:generations-used";
+
+const PLAN_FEATURES = [
+  "Unlimited AI Blog Posts",
+  "Real YouTube Transcript Fetching",
+  "No Watermark",
+];
+
+function readUsage(): number {
+  try {
+    const raw = window.localStorage.getItem(USAGE_STORAGE_KEY);
+    const value = Number.parseInt(raw ?? "0", 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeUsage(value: number) {
+  try {
+    window.localStorage.setItem(USAGE_STORAGE_KEY, String(value));
+  } catch {
+    // Private mode or storage disabled: the gate still works for this session.
+  }
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="h-4 w-4 shrink-0 text-accent"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function PaywallModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [redirecting, setRedirecting] = useState(false);
+  const [agreed, setAgreed] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setRedirecting(false);
+    setAgreed(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-black/70 backdrop-blur-sm"
+      />
+
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="paywall-title"
+        className="relative w-full max-w-md animate-fade-up overflow-hidden rounded-2xl border border-line bg-surface p-6 text-center shadow-2xl sm:p-8"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 top-[-90px] h-40 w-64 -translate-x-1/2 rounded-full bg-accent/10 blur-[70px]"
+        />
+
+        <span className="relative inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.03] px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+          Free limit reached · {FREE_LIMIT}/{FREE_LIMIT} used
+        </span>
+
+        <h2
+          id="paywall-title"
+          className="relative mt-4 text-[22px] font-semibold leading-tight tracking-[-0.02em] text-ink sm:text-[26px]"
+        >
+          Unlock Unlimited Power
+          <span className="text-accent">*</span>
+        </h2>
+
+        <p className="relative mt-3 text-[12.5px] font-semibold leading-6 text-red-400">
+          🔥 Only 10 Early Bird spots left at $9.9/month!
+        </p>
+
+        <ul className="relative mt-5 space-y-2.5 text-left">
+          {PLAN_FEATURES.map((feature) => (
+            <li
+              key={feature}
+              className="flex items-center gap-2.5 text-[13px] text-[#C8C8D0]"
+            >
+              <CheckIcon />
+              {feature}
+            </li>
+          ))}
+        </ul>
+
+        {/* Consent gate: the pay button stays disabled until this is checked. */}
+        <div className="relative mt-5 flex items-start gap-2.5 rounded-lg border border-line bg-white/[0.02] p-3 text-left">
+          <input
+            id="paywall-agree"
+            type="checkbox"
+            checked={agreed}
+            onChange={(event) => setAgreed(event.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#D7FF3E]"
+          />
+          <div className="text-[11.5px] leading-5 text-muted">
+            <label htmlFor="paywall-agree" className="cursor-pointer">
+              I agree to the
+            </label>{" "}
+            <Link
+              href="/terms"
+              className="text-ink underline decoration-line underline-offset-2 hover:text-accent"
+            >
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link
+              href="/privacy"
+              className="text-ink underline decoration-line underline-offset-2 hover:text-accent"
+            >
+              Privacy Policy
+            </Link>
+          </div>
+        </div>
+
+        <div className="relative mt-4">
+          {redirecting ? (
+            <div
+              role="status"
+              className="flex items-center justify-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.06] px-4 py-3 text-[13px] text-accent"
+            >
+              <Spinner />
+              Redirecting to Paddle Checkout...
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!agreed}
+              onClick={() => setRedirecting(true)}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-[13.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:bg-[#2A2A31] disabled:text-muted/60 disabled:hover:bg-[#2A2A31]"
+            >
+              Pay with Credit Card
+            </button>
+          )}
+        </div>
+
+        <p className="relative mt-3 text-[10.5px] text-muted/70">
+          $9.9/month · cancel anytime · 7-day money-back guarantee
+        </p>
+
+        <p className="relative mt-2 text-[10.5px] text-muted/50">
+          <Link href="/refund" className="underline decoration-line underline-offset-2 hover:text-muted">
+            Refund Policy
+          </Link>
+          <span className="text-muted/40"> · </span>
+          <Link href="/cookies" className="underline decoration-line underline-offset-2 hover:text-muted">
+            Cookie Policy
+          </Link>
+        </p>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="relative mt-4 text-[11px] text-muted/60 transition hover:text-ink"
+        >
+          Maybe later
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
@@ -407,6 +605,8 @@ export default function HomePage() {
   const [streamText, setStreamText] = useState("");
   const [reviseNotice, setReviseNotice] = useState("");
   const [loadingStep, setLoadingStep] = useState(0);
+  const [usage, setUsage] = useState(0);
+  const [paywallOpen, setPaywallOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const bufferRef = useRef("");
@@ -515,6 +715,19 @@ export default function HomePage() {
       return;
     }
 
+    const used = readUsage();
+
+    // Free tier exhausted: block the request and show the paywall instead.
+    if (used >= FREE_LIMIT) {
+      setFieldError(null);
+      setUsage(used);
+      setPaywallOpen(true);
+      return;
+    }
+
+    writeUsage(used + 1);
+    setUsage(used + 1);
+
     setFieldError(null);
     setActiveUrl(url.trim());
     void runGenerate(url.trim());
@@ -595,6 +808,11 @@ export default function HomePage() {
 
     return () => window.clearInterval(timer);
   }, [status]);
+
+  // Restore the free-tier counter from localStorage on first paint.
+  useEffect(() => {
+    setUsage(readUsage());
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -735,6 +953,11 @@ export default function HomePage() {
               <code className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-muted">
                 youtube.com/shorts/…
               </code>
+              <span className="text-muted/40">·</span>
+              <span>
+                {Math.max(FREE_LIMIT - usage, 0)} of {FREE_LIMIT} free
+                generations left
+              </span>
             </div>
           )}
         </form>
@@ -1048,15 +1271,80 @@ export default function HomePage() {
           </article>
         )}
 
-        {/* Footer */}
-        <footer className="mt-16 flex flex-col gap-2 border-t border-line pt-6 text-[11px] text-muted/70 sm:flex-row sm:items-center sm:justify-between">
-          <p>
-            Live output via{" "}
-            <code className="font-mono text-muted">/api/generate</code> · key
-            stays server-side
-          </p>
-          <p className="font-mono">Next.js · Tailwind CSS</p>
-        </footer>
+        {/* Pricing */}
+        <section id="pricing" className="mt-20">
+          <div className="flex flex-col items-center text-center">
+            <p className="inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-[10.5px] uppercase tracking-[0.16em] text-muted">
+              Pricing
+            </p>
+            <h2 className="mt-5 text-[26px] font-semibold leading-tight tracking-[-0.02em] text-ink sm:text-[32px]">
+              Simple Pricing
+            </h2>
+            <p className="mt-3 max-w-md text-[13px] leading-6 text-muted">
+              One plan. Everything unlocked. No credits, no tiers, no surprises.
+            </p>
+          </div>
+
+          <div className="relative mx-auto mt-8 max-w-md overflow-hidden rounded-2xl border border-accent/25 bg-surface p-6 sm:p-8">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-[-110px] h-44 w-72 -translate-x-1/2 rounded-full bg-accent/10 blur-[80px]"
+            />
+
+            <div className="relative flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-red-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+                Early bird · 10 spots left
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted/60">
+                monthly
+              </span>
+            </div>
+
+            <div className="relative mt-6 flex items-baseline gap-1">
+              <span className="text-[40px] font-semibold tracking-[-0.03em] text-ink">
+                $9.9
+              </span>
+              <span className="text-[13px] text-muted">/month</span>
+              <span className="ml-2 text-[12px] text-muted/50 line-through">
+                $19.9
+              </span>
+            </div>
+
+            <ul className="relative mt-6 space-y-3">
+              {PLAN_FEATURES.map((feature) => (
+                <li
+                  key={feature}
+                  className="flex items-center gap-2.5 text-[13.5px] text-[#C8C8D0]"
+                >
+                  <CheckIcon />
+                  {feature}
+                </li>
+              ))}
+            </ul>
+
+            <button
+              type="button"
+              onClick={() => setPaywallOpen(true)}
+              className="relative mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 text-[13.5px] font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+            >
+              Get unlimited access
+            </button>
+
+            <p className="relative mt-3 text-center text-[10.5px] leading-5 text-muted/60">
+              7-day money-back guarantee ·{" "}
+              <Link
+                href="/refund"
+                className="underline decoration-line underline-offset-2 hover:text-muted"
+              >
+                Refund Policy
+              </Link>
+            </p>
+          </div>
+        </section>
+
+        {/* Paywall */}
+        <PaywallModal open={paywallOpen} onClose={() => setPaywallOpen(false)} />
       </div>
     </main>
   );
