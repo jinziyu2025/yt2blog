@@ -200,10 +200,12 @@ function buildSystemPrompt(): string {
     "Absolute bans. A checker scans the finished draft and rewrites the whole piece when any of these appears:",
     "- Antithesis and balanced pairs: \"A, not B\" (\"solid hardware, not a revolution\"), \"It is not X, it is Y\", \"Not only ... but also ...\", \"No X, no Y, just Z\", \"less X, more Y\", \"more X than Y\". Say the thing once. If two ideas really matter, use two plain sentences.",
     "- Manufactured parallelism: three clauses cut from one template, matched pairs tuned for rhythm (\"fast on paper, slow in practice\"), lists built for cadence rather than information.",
+    "- Anaphora runs: two sentences in a row opening with the same emphatic word (\"Nobody asked. Nobody cared.\"), or three in a row opening with the same word at all. Also banned: three consecutive sentences built on which / that / who clauses.",
+    "- Definitional paragraph openers: never start a paragraph with a tidy summary sentence of the \"X is the oldest device\" / \"Y is the real problem\" shape. A paragraph may start mid-thought, with a dash, with an ellipsis, with half a sentence, with an action, or with a boring fact.",
     "- Paragraph punchlines. Never land a paragraph on a quotable one-liner or a mini-summary. A paragraph may end on a boring detail, a plain action, a half-finished complaint, or a shrug.",
     "- More than one metaphor in the whole article. One image, maximum, and only if it beats the plain wording. Elsewhere use everyday words and a precise verb.",
     "",
-    "Voice target: an amateur blogger who has had two beers at midnight and is typing fast, not a writer polishing an essay. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice.",
+    "Voice target: an amateur blogger who has had two beers at midnight and is typing fast, not a writer polishing an essay. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice. Dashes (—) and ellipses (...) are welcome when a thought interrupts itself, so the text reads like someone typing while thinking.",
     "",
     "Opening (this matters most):",
     "- Start inside the video: \"In a recent video, YouTuber [name] puts ... to the test.\"",
@@ -226,6 +228,8 @@ function buildSystemPrompt(): string {
     "- Joke density: at most one smart line per two paragraphs, and only where the thought itself is funny. Do not sprinkle quips over plain information.",
     "- Metaphor budget: one image for the entire article. One. Elsewhere write plainly and let a precise verb work (smashed, gouged, drifted, stalled, melted). No decorative similes, no comparisons stacked in a paragraph.",
     "- Antithesis and parallelism are banned outright: \"A, not B\", \"It is not X, it is Y\", \"No X, no Y, just Z\", \"Not only ... but also\", \"less X, more Y\", matched pairs, three clauses cut from one template. The checker rewrites the draft when it finds them.",
+    "- Anaphora is banned: no \"Nobody... Nobody...\", no \"X... X... X...\", no three consecutive which / that / who clauses. The checker also rewrites for these.",
+    "- Paragraph openings must not define or summarise. No \"Looping is the oldest device.\" Start mid-thought instead: \"Loops, honestly, are the reason I stopped watching at 20 minutes...\" or \"He loops the same four bars for eleven minutes.\"",
     "- No paragraph punchlines. Do not land each paragraph on a quotable line or a mini-summary. Allowed endings: a boring detail, an unfinished action, a complaint that goes nowhere, a shrug.",
     "- Banned business-report vocabulary: \"a study in\", \"the moat\", \"logistics not magic\", \"unit economics\", \"value proposition\", \"market positioning\", \"best-in-class\", \"paradigm shift\", \"ecosystem play\", \"moat-building\", \"go-to-market\". Rewrite the idea in kitchen-table English instead.",
     "- Tech products: the angle is what it changes for an ordinary person - the commute, the kitchen counter, the wallet, the family group chat, the sleep. Do NOT write about supply chains, market share, competitive strategy, or corporate chess. Save the business-school framing for the business video and even then keep it conversational.",
@@ -235,7 +239,7 @@ function buildSystemPrompt(): string {
     "- Three consecutive paragraphs must never open the same way. Same pronoun subject (He/She/They/It), same \"The + noun\" opener, or the same adverbial template all count as the same.",
     "- Rotate on purpose: time or place first (\"By the second week, ...\", \"On a hot pan, ...\"); straight action with no subject (\"The phone died at 4pm, mid-photo.\"); short verdict (\"That screen is genuinely great.\"); inversion or a short question (\"Why bother testing it again?\"); concrete detail first (\"Twenty minutes before cooking, the steaks come out of the fridge.\").",
     "- At least half of the section-opening sentences must start without a person as the subject.",
-    "- Use 2-3 em dashes or parenthetical asides (\"— which is the whole problem —\") across the piece. Fragments of 3-8 words are fine mid-thought; do not park a fragment alone as a punchline.",
+    "- Use 2-3 em dashes, ellipses (...) or parenthetical asides (\"— which is the whole problem —\") across the piece. An ellipsis mid-sentence is fine when the thought stalls. Fragments of 3-8 words are fine mid-thought; do not park a fragment alone as a punchline.",
     "- Assert, do not report: write \"The AI feature is not shipping.\" instead of \"It can be said that ...\" or \"The creator states that ...\". Do not follow an assertion with a summary line that explains it.",
     "- A judgment can carry an attitude word (sharp, sloppy, lazy, genuinely good, unfinished) as long as no fact is invented.",
     "",
@@ -496,6 +500,8 @@ type StyleStats = {
   repeatedOpeners: number;
   windows: string[];
   antithesis: string[];
+  anaphora: string[];
+  definitional: string[];
   dashes: number;
   asides: number;
   shortSentences: number;
@@ -620,6 +626,78 @@ function findAntithesis(paragraphs: string[]): string[] {
   return hits;
 }
 
+function firstWordOf(sentence: string): string {
+  return (/^[A-Za-z'’]+/.exec(sentence.replace(/^[\s"'“”‘’()[\]*—-]+/, ""))?.[0] ?? "").toLowerCase();
+}
+
+// Emphatic openers that read like a slogan when repeated back to back.
+const ANAPHORA_WORDS = new Set([
+  "nobody", "nothing", "never", "no", "none", "everyone", "everything", "everybody",
+  "someone", "something", "somebody", "always", "every", "each", "all", "only", "which",
+]);
+
+// Words too common to count as a deliberate anaphora when repeated three times.
+const ANAPHORA_SKIP = new Set(["i", "you", "and", "but", "so", "then", "if", "when", "it"]);
+
+const RELATIVE_CLAUSE = /,\s*(?:which|who|whom|where)\b/i;
+
+function findAnaphora(paragraphs: string[]): string[] {
+  const hits: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const sentences = splitSentences(paragraph);
+    const firsts = sentences.map(firstWordOf);
+
+    for (let i = 0; i < firsts.length; i += 1) {
+      if (hits.length >= 5) return hits;
+      const word = firsts[i];
+
+      if (word && word === firsts[i + 1] && ANAPHORA_WORDS.has(word)) {
+        hits.push(`anaphora: "${word} ... ${word}"`);
+        continue;
+      }
+
+      if (
+        i + 2 < firsts.length &&
+        word === firsts[i + 1] &&
+        word === firsts[i + 2] &&
+        !ANAPHORA_SKIP.has(word)
+      ) {
+        hits.push(`anaphora: "${word}" three times in a row`);
+        continue;
+      }
+
+      if (
+        i + 2 < firsts.length &&
+        RELATIVE_CLAUSE.test(sentences[i]) &&
+        RELATIVE_CLAUSE.test(sentences[i + 1]) &&
+        RELATIVE_CLAUSE.test(sentences[i + 2])
+      ) {
+        hits.push("anaphora: three consecutive which/who clauses");
+      }
+    }
+  }
+
+  return hits;
+}
+
+// "Looping is the oldest device." - a tidy definition where a thought should
+// start. Numbers and measurements are exempt so factual descriptions survive.
+function findDefinitionalOpeners(paragraphs: string[]): string[] {
+  const hits: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    const first = splitSentences(paragraph)[0] ?? "";
+    if (!first || wordsIn(first) > 12 || /\d/.test(first)) continue;
+    if (!/^(?:the|a|an|this|that)?\s*[A-Za-z][A-Za-z'’\s-]{0,34}\s+(?:is|was|are|were)\s+(?:the|a|an|what)\b/i.test(first)) {
+      continue;
+    }
+    hits.push(`definitional opener: "${first.slice(0, 70)}"`);
+  }
+
+  return hits;
+}
+
 function analyzeStyle(post: BlogPost): StyleStats {
   const paragraphs = paragraphsOf(post);
   const openers = paragraphs.map(openerFamily);
@@ -667,6 +745,8 @@ function analyzeStyle(post: BlogPost): StyleStats {
     repeatedOpeners: windows.length,
     windows,
     antithesis: findAntithesis(paragraphs),
+    anaphora: findAnaphora(paragraphs),
+    definitional: findDefinitionalOpeners(paragraphs),
     dashes: dashMatches.length,
     asides,
     shortSentences: lens.filter((n) => n <= 8).length,
@@ -1029,7 +1109,9 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
           reviseNote
         )} paragraphs=${style.paragraphs} repeated=${style.repeatedOpeners} antithesis=${
           style.antithesis.length
-        } hits=${style.antithesis.join(" | ") || "none"} windows=${
+        } anaphora=${style.anaphora.length} definitional=${style.definitional.length} hits=${
+          [...style.antithesis, ...style.anaphora, ...(style.definitional.length >= 2 ? style.definitional : [])].join(" | ") || "none"
+        } windows=${
           style.windows.join(",") || "none"
         } dashes=${style.dashes} asides=${style.asides} short8=${style.shortSentences} assertions=${
           style.assertions
@@ -1040,14 +1122,20 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
           .join("/")}`
       );
 
-      if (attempt === 0 && style.antithesis.length > 0) {
-        reviseNote = `The draft used banned antithesis or parallelism: ${style.antithesis.join(
+      const violations = [
+        ...style.antithesis,
+        ...style.anaphora,
+        ...(style.definitional.length >= 2 ? style.definitional : []),
+      ];
+
+      if (attempt === 0 && violations.length > 0) {
+        reviseNote = `The draft broke these hard rules: ${violations.join(
           " | "
-        )}. Rewrite the whole piece and replace every one of those sentences with a single plain statement. No "A, not B", no "It is not X, it is Y", no "No X, no Y, just Z", no "Not only ... but also", no matched pairs. Also remove every paragraph-ending punchline, allow at most one metaphor in the entire article, and keep every sentence under 28 words. Keep every fact from the transcript unchanged.`;
+        )}. Rewrite the whole piece. Replace every listed sentence with one plain statement: no "A, not B", no "Nobody... Nobody...", no three consecutive which / who clauses, no three sentences starting with the same word. Do not open a paragraph with a definitional summary sentence ("X is the oldest device"); start mid-thought, with a dash, with an ellipsis, or with an action. Use dashes (—) and ellipses (...) where the thought breaks. Allow at most one metaphor, no paragraph punchlines, every sentence under 28 words, and keep every fact from the transcript unchanged.`;
         console.log(
-          `${LOG_PREFIX_STYLE} antithesis-retry videoId=${options.videoId} hits=${style.antithesis.length}`
+          `${LOG_PREFIX_STYLE} violation-retry videoId=${options.videoId} hits=${violations.length}`
         );
-        options.callbacks.onRevise?.({ reason: "banned antithesis" });
+        options.callbacks.onRevise?.({ reason: "banned parallelism" });
         continue;
       }
 
