@@ -35,6 +35,7 @@ export type TranscriptResult =
 
 type TranscriptPayload = {
   content?: unknown;
+  transcript?: unknown;
   lang?: unknown;
   availableLangs?: unknown;
   jobId?: unknown;
@@ -145,8 +146,9 @@ async function requestJson(
 }
 
 /**
- * Supadata returns `content` as a plain string when text=true, or as an array
- * of timed chunks otherwise. Accept both so a schema change cannot break us.
+ * Supadata returns the text under `content` (current API). Some docs and SDKs
+ * also show `transcript`, so accept both, and accept either a plain string
+ * (text=true) or an array of timed chunks.
  */
 function extractText(content: unknown): { text: string; segments: number } {
   if (typeof content === "string") {
@@ -209,7 +211,7 @@ async function pollJob(jobId: string, apiKey: string, startedAt: number): Promis
     const state = asString(payload.status);
 
     if (state === "completed") {
-      const { text, segments } = extractText(payload.content);
+      const { text, segments } = extractText(payload.content ?? payload.transcript);
       if (!text) {
         return {
           kind: "failed",
@@ -284,7 +286,7 @@ export async function fetchEnglishTranscript(videoId: string): Promise<Transcrip
         };
       }
 
-      const { text, segments } = extractText(payload.content);
+      const { text, segments } = extractText(payload.content ?? payload.transcript);
 
       if (!text) {
         console.log(`${LOG_PREFIX} empty-content videoId=${videoId} status=${status}`);
