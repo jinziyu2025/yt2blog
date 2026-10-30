@@ -449,11 +449,13 @@ function PaywallModal({
 }) {
   const [redirecting, setRedirecting] = useState(false);
   const [agreed, setAgreed] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setRedirecting(false);
     setAgreed(false);
+    setPayError(null);
   }, [open]);
 
   useEffect(() => {
@@ -469,13 +471,26 @@ function PaywallModal({
 
   async function handlePay() {
     setRedirecting(true);
+    setPayError(null);
 
     try {
-      // Forward the saved affiliate ref into Paddle's customData.
-      const mode = await startPaddleCheckout(getAffiliateRef());
-      if (mode === "paddle") onClose();
+      // Opens the real Paddle overlay when the env vars are configured; the
+      // affiliate ref travels inside Paddle's customData.
+      const status = await startPaddleCheckout(getAffiliateRef());
+
+      if (status === "opened") {
+        onClose();
+        return;
+      }
+
+      if (status === "invalid-price-id") {
+        setRedirecting(false);
+        setPayError("Checkout is temporarily unavailable. Please try again later.");
+      }
+      // status === "placeholder": keep the review placeholder visible.
     } catch {
-      // Paddle.js failed to load: keep the placeholder notice visible.
+      setRedirecting(false);
+      setPayError("Could not open checkout. Check your connection and try again.");
     }
   }
 
@@ -577,6 +592,15 @@ function PaywallModal({
             </button>
           )}
         </div>
+
+        {payError ? (
+          <p
+            role="alert"
+            className="relative mt-2 text-center text-[11px] leading-5 text-red-400"
+          >
+            {payError}
+          </p>
+        ) : null}
 
         <p className="relative mt-3 text-[10.5px] text-muted/70">
           $9.9/month · cancel anytime · 7-day money-back guarantee

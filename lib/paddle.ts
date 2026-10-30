@@ -1,16 +1,19 @@
 /**
  * Paddle.js checkout bridge.
  *
- * The real product/price IDs live in env vars. Until they are configured the
- * checkout falls back to a placeholder state that the paywall renders as
- * "Redirecting to Paddle Checkout...", which is exactly what Paddle's review
- * flow expects to see while the integration is pending.
+ * Configure `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN` and `NEXT_PUBLIC_PADDLE_PRICE_ID`
+ * (a Paddle price entity ID starting with `pri_`, not a product ID).
+ * When either value is missing the paywall falls back to the placeholder
+ * "Redirecting to Paddle Checkout..." notice used during review.
  *
  * When configured, the affiliate ref is forwarded through `customData` so it
  * shows up in Paddle webhooks and payout reconciliation.
  */
 
-export type PaddleCheckoutMode = "paddle" | "placeholder";
+export type PaddleCheckoutStatus =
+  | "opened"
+  | "placeholder"
+  | "invalid-price-id";
 
 type PaddleGlobal = {
   Initialize: (options: { token: string }) => void;
@@ -18,6 +21,11 @@ type PaddleGlobal = {
     open: (options: {
       items: { priceId: string; quantity: number }[];
       customData?: Record<string, string>;
+      settings?: {
+        displayMode?: "overlay" | "inline";
+        theme?: "light" | "dark";
+        locale?: string;
+      };
     }) => void;
   };
 };
@@ -31,6 +39,7 @@ declare global {
 const PADDLE_SCRIPT_SRC = "https://cdn.paddle.com/paddle/v2/paddle.js";
 
 let scriptPromise: Promise<void> | null = null;
+let initializedToken: string | null = null;
 
 function loadPaddleScript(): Promise<void> {
   if (typeof window === "undefined") {
@@ -65,24 +74,46 @@ function loadPaddleScript(): Promise<void> {
   return scriptPromise;
 }
 
+async function ensurePaddle(token: string): Promise<PaddleGlobal> {
+  await loadPaddleScript();
+
+  const paddle = window.Paddle;
+  if (!paddle) throw new Error("Paddle.js loaded but window.Paddle is missing.");
+
+  // Paddle.Initialize() only needs to run once per token for a page session.
+  if (initializedToken !== token) {
+    paddle.Initialize({ token });
+    initializedToken = token;
+  }
+
+  return paddle;
+}
+
 export async function startPaddleCheckout(
   affiliateRef: string | null
-): Promise<PaddleCheckoutMode> {
-  const token = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
-  const priceId = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID;
+): Promise<PaddleCheckoutStatus> {
+  const token = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN?.trim();
+  const priceId = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID?.trim();
 
   // Not configured yet: let the paywall keep showing the placeholder notice.
   if (!token || !priceId) return "placeholder";
 
-  await loadPaddleScript();
-  const paddle = window.Paddle;
-  if (!paddle) return "placeholder";
+  // Paddle.Checkout.open() only accepts price entity IDs (pri_...).
+  if (!priceId.startsWith("pri_")) {
+    console.error(
+      "[paddle] NEXT_PUBLIC_PADDLE_PRICE_ID must be a price ID starting with " +
+        `"pri_". Received "${priceId}" — product IDs (pro_...) are not valid here.`
+    );
+    return "invalid-price-id";
+  }
 
-  paddle.Initialize({ token });
+  const paddle = await ensurePaddle(token);
+
   paddle.Checkout.open({
     items: [{ priceId, quantity: 1 }],
-    customData: affiliateRef ? { affiliate_ref: affiliateRef } : {},
+    ...(affiliateRef ? { customData: { affiliate_ref: affiliateRef } } : {}),
+    settings: { displayMode: "overlay", theme: "dark", locale: "en" },
   });
 
-  return "paddle";
+  return "opened";
 }
