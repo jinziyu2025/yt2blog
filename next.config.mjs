@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Lets us build/start a production bundle next to a running dev server
-  // without touching the dev `.next` directory. Render uses the default.
-  distDir: process.env.NEXT_DIST_DIR || ".next",
+  // Always build into the default `.next` directory. A configurable distDir
+  // (previously driven by NEXT_DIST_DIR) could point Render's build and start
+  // steps at different folders and surface as a 404 on every route.
   webpack: (config, { dev }) => {
     if (dev) {
       // Keep the project-local Node/npm toolchain out of the dev watcher so
