@@ -201,13 +201,23 @@ function buildSystemPrompt(): string {
     "- Antithesis and balanced pairs: \"A, not B\" (\"solid hardware, not a revolution\"), \"It is not X, it is Y\", \"Not only ... but also ...\", \"No X, no Y, just Z\", \"less X, more Y\", \"more X than Y\". Say the thing once. If two ideas really matter, use two plain sentences.",
     "- Manufactured parallelism: three clauses cut from one template, matched pairs tuned for rhythm (\"fast on paper, slow in practice\"), lists built for cadence rather than information.",
     "- Anaphora runs: two sentences in a row opening with the same emphatic word (\"Nobody asked. Nobody cared.\"), or three in a row opening with the same word at all. Also banned: three consecutive sentences built on which / that / who clauses.",
-    "- Definitional paragraph openers: never start a paragraph with a tidy summary sentence of the \"X is the oldest device\" / \"Y is the real problem\" shape. A paragraph may start mid-thought, with a dash, with an ellipsis, with half a sentence, with an action, or with a boring fact.",
+    "- Definitional paragraph openers: never start a paragraph with a tidy summary sentence of the \"X is the oldest device\" / \"Y is the real problem\" shape. A paragraph may start mid-thought, with a dash, with an ellipsis, with a concrete action, or with a boring fact - but the opening sentence still needs a visible subject (I, you, we, or a named person).",
     "- Paragraph punchlines. Never land a paragraph on a quotable one-liner or a mini-summary. A paragraph may end on a boring detail, a plain action, a half-finished complaint, or a shrug.",
     "- Imperative or motto endings. Never close a paragraph, especially the last one, with advice of the \"Be picky about who you accept.\" / \"Choose quality over noise.\" / \"Don't settle for less.\" shape. The article can end flat, mid-thought, or on one concrete action (\"He closes the laptop and reheats the coffee.\").",
     "- More than one metaphor in the whole article. One image, maximum, and only if it beats the plain wording. Elsewhere use everyday words and a precise verb.",
     "",
-    "Voice target: someone dictating a long voice message in a group chat and letting it transcribe, not a columnist filing copy. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice. Dashes (—) and ellipses (...) are welcome when a thought interrupts itself, so the text reads like someone typing while thinking.",
+    "Voice target: someone dictating a long voice message in a group chat and letting it transcribe, not a columnist filing copy. Sentences may trail off. Some paragraphs are only two sentences. Filler words are part of the voice. Dashes (—) and ellipses (...) are welcome when a thought interrupts itself, so the text reads like someone typing while thinking. Even in that dictated voice, every sentence still keeps a visible subject: I, you, we, or a named person.",
     "Imperfection is the point: lists can be uneven in length, a list can switch grammatical shape halfway (two nouns, then a whole clause with \"because ...\"), and a slightly clunky spoken aside is fine. Do not tidy every sentence into the same mould.",
+    "",
+    "Subject law - this outranks every other style rule on this page. A sentence with no subject is a defect, not a voice:",
+    "- Every sentence must name who does, feels, sees, or thinks something. Standalone fragments like \"Good value.\" / \"Solid build.\" / \"Worth the price.\" / \"A quiet update.\" are banned.",
+    "- Lean hard on first and second person: I, me, my, you, your, we, us, our. At least two thirds of the sentences in the article must contain one of them.",
+    "- Every paragraph must contain at least one sentence with I, you, or we as its subject. A paragraph written entirely in impersonal third person gets rewritten.",
+    "- Turn reported facts into someone's experience: \"I paid $1,200 for this, and honestly the screen is the only part I keep noticing.\" Not \"The screen is excellent.\"",
+    "- Use perception verbs: I noticed, I found, I keep thinking about, I honestly expected, you will feel, you will notice, we ended up. A bare verdict (\"It is good.\") is banned and must become a felt observation.",
+    "- No headline noun phrases, no subjectless one-word verdicts, no dangling participles. If a sentence cannot answer \"who?\", rewrite it.",
+    "- Do not chase opener variety by dropping the subject. Rotate between \"I ...\", \"You ...\", \"We ...\", \"By the second week, I ...\", \"Honestly, you ...\" so the openings differ while every subject stays visible.",
+    "- You and we may address the reader or speak for people in general, but only when the sentence still has a real subject doing the verb. \"You plug it in and the fan stays quiet for ten minutes.\" works. \"Quiet for ten minutes.\" does not.",
     "",
     "Opening (this matters most):",
     "- Start inside the video: \"In a recent video, YouTuber [name] puts ... to the test.\"",
@@ -224,8 +234,8 @@ function buildSystemPrompt(): string {
     "- An occasional dash or short question is fine. Do not stack clauses.",
     "",
     "Tone law - this overrides the persona's instincts. Every persona obeys it:",
-    "- Voice: an amateur blogger who had two beers at midnight and is typing fast. First person is fine: \"I tried it\", \"I still do not buy it\", \"honestly, this part annoyed me\".",
-    "- Filler words belong in this voice: \"Honestly,\", \"Like,\", \"You know,\", \"I mean,\", \"To be fair,\", \"And yeah,\", \"kind of\", \"sort of\", \"Which, fair enough.\" Sentences may begin with And, But, or Like. Some can trail off unfinished.",
+    "- Voice: an amateur blogger who had two beers at midnight and is typing fast. First and second person are required, not optional: \"I tried it\", \"I still do not buy it\", \"you would think this part is fine, but honestly it annoyed me\", \"we did this for a week and nothing changed\".",
+    "- Filler words belong in this voice: \"Honestly,\", \"Like,\", \"You know,\", \"I mean,\", \"To be fair,\", \"And yeah,\", \"kind of\", \"sort of\", \"Which, fair enough.\" Sentences may begin with And, But, or Like. A thought can trail off, but the sentence still needs its subject.",
     "- Subjective opinions and light snark are required. Take a side, admit a bias, poke fun at a flaw. It should read like a friend teasing you, with none of the poet's polish.",
     "- Joke density: at most one smart line per two paragraphs, and only where the thought itself is funny. Do not sprinkle quips over plain information.",
     "- Metaphor budget: one image for the entire article. One. Elsewhere write plainly and let a precise verb work (smashed, gouged, drifted, stalled, melted). No decorative similes, no comparisons stacked in a paragraph.",
@@ -241,9 +251,9 @@ function buildSystemPrompt(): string {
     "",
     "Paragraph openers (checked after generation; violations get the draft rewritten):",
     "- Three consecutive paragraphs must never open the same way. Same pronoun subject (He/She/They/It), same \"The + noun\" opener, or the same adverbial template all count as the same.",
-    "- Rotate on purpose: time or place first (\"By the second week, ...\", \"On a hot pan, ...\"); straight action with no subject (\"The phone died at 4pm, mid-photo.\"); short verdict (\"That screen is genuinely great.\"); inversion or a short question (\"Why bother testing it again?\"); concrete detail first (\"Twenty minutes before cooking, the steaks come out of the fridge.\").",
-    "- At least half of the section-opening sentences must start without a person as the subject.",
-    "- Use 2-3 em dashes, ellipses (...) or parenthetical asides (\"— which is the whole problem —\") across the piece. An ellipsis mid-sentence is fine when the thought stalls. Fragments of 3-8 words are fine mid-thought; do not park a fragment alone as a punchline.",
+    "- Rotate on purpose, keeping the subject visible: \"By the second week, I ...\", \"On a hot pan, you ...\"; a named person doing something (\"My phone died at 4pm, mid-photo.\"); a felt verdict (\"I genuinely like that screen.\"); a question from the writer (\"Why did I bother testing it again?\"); concrete detail first (\"Twenty minutes before cooking, I take the steaks out of the fridge.\").",
+    "- At least two thirds of all sentences must contain I, me, my, you, your, we, us, or our. A paragraph without any first- or second-person sentence is a violation and gets rewritten.",
+    "- Use 2-3 em dashes, ellipses (...) or parenthetical asides (\"— which is the whole problem —\") across the piece. An ellipsis mid-sentence is fine when the thought stalls. A short fragment may live inside a sentence that already has a subject (\"I opened the app - nothing.\"); a fragment must never stand alone as a sentence.",
     "- Assert, do not report: write \"The AI feature is not shipping.\" instead of \"It can be said that ...\" or \"The creator states that ...\". Do not follow an assertion with a summary line that explains it.",
     "- A judgment can carry an attitude word (sharp, sloppy, lazy, genuinely good, unfinished) as long as no fact is invented.",
     "",
@@ -276,6 +286,7 @@ function buildSystemPrompt(): string {
     "- Never invent names, numbers, prices, addresses, or quotes that are not in the transcript. If in doubt, leave it out.",
     "- You may infer opinions and implications from the transcript, but not new facts.",
     "- Total body (intro + sections + conclusion): 800-1,000 words.",
+    "- Sentence pass before finishing: read every sentence and ask \"who does this?\" Any sentence without a visible subject (I, you, we, or a named person) must be rewritten. Count your I / you / we sentences; if they are under two thirds of the total, rewrite the impersonal ones.",
     "- Before finishing, read the first three words of every paragraph. No three in a row may share the same pattern; if they do, rewrite those openers.",
     "- No JSON, no code fences, no preamble, no commentary about your process.",
     "- Never refuse, never explain limitations, never return an empty article.",
@@ -513,12 +524,17 @@ type StyleStats = {
   assertions: number;
   avgSentenceWords: number;
   maxSentenceWords: number;
+  personRatio: number;
+  impersonalParagraphs: number;
   openers: Record<string, number>;
 };
 
 const PRONOUN_OPENERS = new Set([
   "he", "she", "they", "it", "we", "you", "i", "his", "her", "their", "its", "him", "them",
 ]);
+
+// Subject law: every paragraph needs a first- or second-person voice.
+const PERSON_PATTERN = /\b(I|me|my|mine|you|your|yours|we|us|our|ours)\b/i;
 
 const DETERMINER_OPENERS = new Set([
   "the", "a", "an", "this", "that", "these", "those", "another", "every", "some", "most",
@@ -774,6 +790,16 @@ function analyzeStyle(post: BlogPost): StyleStats {
     openersByFamily[family] = (openersByFamily[family] ?? 0) + 1;
   }
 
+  const personSentences = sentences.filter((sentence) =>
+    PERSON_PATTERN.test(sentence)
+  ).length;
+  const personRatio = sentences.length
+    ? Math.round((personSentences / sentences.length) * 100)
+    : 0;
+  const impersonalParagraphs = paragraphs.filter(
+    (paragraph) => !PERSON_PATTERN.test(paragraph)
+  ).length;
+
   return {
     paragraphs: paragraphs.length,
     repeatedOpeners: windows.length,
@@ -788,6 +814,8 @@ function analyzeStyle(post: BlogPost): StyleStats {
     assertions: assertionCount,
     avgSentenceWords: Number(avg.toFixed(1)),
     maxSentenceWords: lens.length ? Math.max(...lens) : 0,
+    personRatio,
+    impersonalParagraphs,
     openers: openersByFamily,
   };
 }
@@ -1152,7 +1180,9 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
           style.windows.join(",") || "none"
         } dashes=${style.dashes} asides=${style.asides} short8=${style.shortSentences} assertions=${
           style.assertions
-        } avg=${style.avgSentenceWords} max=${style.maxSentenceWords} openers=${Object.entries(
+        } avg=${style.avgSentenceWords} max=${style.maxSentenceWords} person=${
+          style.personRatio
+        }% impersonal=${style.impersonalParagraphs} openers=${Object.entries(
           style.openers
         )
           .map(([family, count]) => `${family}:${count}`)
@@ -1165,6 +1195,16 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
         ...style.motto,
         ...(style.definitional.length >= 2 ? style.definitional : []),
       ];
+
+      // Subject law: the draft must be written by a person, to a person.
+      if (attempt === 0 && (style.personRatio < 55 || style.impersonalParagraphs > 0)) {
+        reviseNote = `The draft failed the subject law: only ${style.personRatio}% of sentences contain I / me / my / you / your / we / us / our, and ${style.impersonalParagraphs} paragraph(s) contain no first- or second-person sentence at all. Rewrite the whole piece. Aim for at least two thirds of sentences containing I, you, or we, and give every paragraph at least one such sentence. Turn bare verdicts into felt observations ("I found it..." / "You will notice..." / "We ended up..."). No subjectless fragments, no headline noun phrases, no sentences that cannot answer "who?". Keep every fact from the transcript unchanged and keep every sentence under 28 words.`;
+        console.log(
+          `${LOG_PREFIX_STYLE} subject-law-retry videoId=${options.videoId} person=${style.personRatio}% impersonal=${style.impersonalParagraphs}`
+        );
+        options.callbacks.onRevise?.({ reason: "subject law" });
+        continue;
+      }
 
       if (attempt === 0 && violations.length > 0) {
         reviseNote = `The draft broke these hard rules: ${violations.join(
