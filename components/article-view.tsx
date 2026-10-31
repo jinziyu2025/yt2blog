@@ -61,9 +61,11 @@ async function copyToClipboard(text: string): Promise<boolean> {
 export default function ArticleView({
   post,
   children,
+  withDisclaimer = true,
 }: {
   post: BlogPost;
   children?: ReactNode;
+  withDisclaimer?: boolean;
 }) {
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
 
@@ -192,7 +194,7 @@ export default function ArticleView({
         </div>
       </article>
 
-      <CopyrightDisclaimer className="mt-4 px-1" />
+      {withDisclaimer ? <CopyrightDisclaimer className="mt-4 px-1" /> : null}
 
       {children}
     </>

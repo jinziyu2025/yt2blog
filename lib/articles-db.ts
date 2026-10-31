@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { buildMarkdown, type BlogPost } from "@/lib/article";
+import type { BlogPost } from "@/lib/article";
 import { ARTICLES_TABLE } from "@/lib/supabase";
 
 export type DbArticle = {
@@ -8,7 +8,6 @@ export type DbArticle = {
   video_id: string;
   title: string;
   meta_description: string;
-  content: string;
   created_at: string;
 };
 
@@ -36,9 +35,10 @@ export function titleToSlug(title: string): string {
 }
 
 /**
- * Writes the generated draft to Supabase and returns the slug that was
- * actually stored. The base slug comes from the English title; on a unique
- * collision we retry with the video id appended, then a timestamp.
+ * Writes only metadata to Supabase (no article body): slug, video_id, title
+ * and the first 200 characters of the generated text as meta_description.
+ * The base slug comes from the English title; on a unique collision we retry
+ * with the video id appended, then a timestamp.
  */
 export async function publishArticle(
   client: SupabaseClient,
@@ -54,8 +54,7 @@ export async function publishArticle(
   const row = {
     video_id: post.videoId,
     title: post.title,
-    meta_description: post.metaDescription,
-    content: buildMarkdown(post),
+    meta_description: post.intro.replace(/\s+/g, " ").trim().slice(0, 200),
   };
 
   for (const slug of candidates) {
@@ -83,7 +82,7 @@ export async function getArticleBySlug(
   try {
     const { data, error } = await client
       .from(ARTICLES_TABLE)
-      .select("id,slug,title,meta_description,content,created_at,video_id")
+      .select("id,slug,title,meta_description,created_at,video_id")
       .eq("slug", slug)
       .maybeSingle();
 

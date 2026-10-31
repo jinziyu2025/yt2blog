@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import CopyrightDisclaimer from "@/components/copyright-disclaimer";
-import { parseArticleMarkdown } from "@/lib/article";
+import FullArticleGenerator from "@/components/full-article-generator";
 import { getArticleBySlug } from "@/lib/articles-db";
 import { getSupabaseServerClient } from "@/lib/supabase";
 import { SITE_URL } from "@/lib/site";
 
-// Articles are written at runtime, so the page is rendered per request
-// straight from Supabase rather than at build time.
+// Only metadata is stored, so this page is rendered per request straight from
+// Supabase and the full text is rebuilt in the visitor's browser on demand.
 export const dynamic = "force-dynamic";
 
 type PageProps = { params: { slug: string } };
@@ -59,7 +59,6 @@ export default async function BlogArticlePage({ params }: PageProps) {
     notFound();
   }
 
-  const { intro, sections } = parseArticleMarkdown(article.content);
   const publishedAt = article.created_at.slice(0, 10);
 
   return (
@@ -93,7 +92,7 @@ export default async function BlogArticlePage({ params }: PageProps) {
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.03] px-2 py-1 text-[10.5px] uppercase tracking-[0.12em]">
                 <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                AI blog draft
+                AI summary
               </span>
               <span className="text-muted/40">·</span>
               <span>Published {publishedAt}</span>
@@ -111,22 +110,11 @@ export default async function BlogArticlePage({ params }: PageProps) {
               {article.title}
             </h1>
 
-            <div className="mt-8">
-              <p className="whitespace-pre-wrap text-[15.5px] leading-[1.85] text-[#D6D6DC]">
-                {intro}
-              </p>
+            <p className="mt-6 whitespace-pre-wrap text-[15.5px] leading-[1.85] text-[#D6D6DC]">
+              {article.meta_description}
+            </p>
 
-              {sections.map((section, index) => (
-                <section key={`${section.heading}-${index}`} className="mt-9">
-                  <h2 className="text-[18px] font-semibold tracking-[-0.01em] text-ink">
-                    {section.heading}
-                  </h2>
-                  <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-[1.85] text-[#B6B6C0]">
-                    {section.body}
-                  </p>
-                </section>
-              ))}
-            </div>
+            <FullArticleGenerator videoId={article.video_id} />
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3.5 sm:px-8">
@@ -139,7 +127,7 @@ export default async function BlogArticlePage({ params }: PageProps) {
               source · youtube.com/watch?v={article.video_id}
             </a>
             <p className="text-[10.5px] text-muted/60">
-              AI draft · edit before publishing
+              AI summary · verify before republishing
             </p>
           </div>
         </article>

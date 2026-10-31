@@ -1,5 +1,5 @@
 const DISCLAIMER_TEXT =
-  "Disclaimer: YT2Blog is an AI-powered content transformation tool. We do not host, store, or claim ownership of any videos or transcripts. Users are solely responsible for ensuring they have the legal right or permission to process any YouTube videos. Any copyright disputes arising from the generated content are the sole responsibility of the user.";
+  "AI-generated summaries. Full text is processed locally in your browser and not stored on our servers. We only retain metadata for SEO. If you are a copyright owner and believe your rights have been infringed, please contact us at support@yt2blog.app and we will remove the metadata immediately under DMCA guidelines.";
 
 export default function CopyrightDisclaimer({
   className = "",
