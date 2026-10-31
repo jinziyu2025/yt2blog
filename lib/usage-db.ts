@@ -1,7 +1,9 @@
 /*
- * Free-tier counter, persisted in IndexedDB (survives "clear cache" in a
- * normal browsing session, unlike a localStorage-only counter). Client-only:
- * this module is imported exclusively from the homepage component.
+ * Free-tier counter, persisted in two places that survive different kinds of
+ * cleanup: IndexedDB (survives clearing the HTTP cache) and a 24-hour cookie
+ * (survives closing the tab, and is shared by normal + incognito sessions on
+ * the same browser profile while it lives). We always gate on the higher of
+ * the two. Client-only: imported exclusively from the homepage component.
  */
 
 const DB_NAME = "yt2blog";
@@ -9,8 +11,12 @@ const DB_VERSION = 1;
 const STORE_NAME = "usage";
 const COUNT_KEY = "generations-used";
 
-// Fallback for browsers/environments where IndexedDB is blocked.
+// Second line of defence when IndexedDB is blocked.
 const FALLBACK_KEY = "yt2blog:generations-used";
+
+// Cookie layer: visible to document.cookie, expires after 24 hours.
+const COOKIE_NAME = "yt2blog_usage";
+const COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
 
 function readFallback(): number {
   try {
@@ -25,7 +31,31 @@ function writeFallback(value: number) {
   try {
     window.localStorage.setItem(FALLBACK_KEY, String(value));
   } catch {
-    // Private mode with storage disabled: the in-memory state still gates this session.
+    // Private mode with storage disabled: the cookie layer still gates this session.
+  }
+}
+
+function readCookie(): number {
+  try {
+    const entry = document.cookie
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${COOKIE_NAME}=`));
+
+    if (!entry) return 0;
+
+    const value = Number.parseInt(entry.slice(COOKIE_NAME.length + 1), 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeCookie(value: number) {
+  try {
+    document.cookie = `${COOKIE_NAME}=${value}; Max-Age=${COOKIE_MAX_AGE_SECONDS}; Path=/; SameSite=Lax`;
+  } catch {
+    // Cookies blocked: IndexedDB still holds the count.
   }
 }
 
@@ -51,7 +81,7 @@ function openDatabase(): Promise<IDBDatabase | null> {
   });
 }
 
-export async function readGenerationsUsed(): Promise<number> {
+async function readStored(): Promise<number> {
   const db = await openDatabase();
   if (!db) return readFallback();
 
@@ -85,18 +115,16 @@ export async function readGenerationsUsed(): Promise<number> {
   });
 }
 
-export async function incrementGenerationsUsed(): Promise<number> {
-  const db = await openDatabase();
-  if (!db) {
-    const next = readFallback() + 1;
-    writeFallback(next);
-    return next;
-  }
+async function writeStored(value: number): Promise<void> {
+  writeFallback(value);
 
-  return new Promise<number>((resolve) => {
+  const db = await openDatabase();
+  if (!db) return;
+
+  await new Promise<void>((resolve) => {
     let settled = false;
 
-    const finish = (value: number) => {
+    const finish = () => {
       if (settled) return;
       settled = true;
       try {
@@ -104,32 +132,50 @@ export async function incrementGenerationsUsed(): Promise<number> {
       } catch {
         // already closed
       }
-      writeFallback(value);
-      resolve(value);
+      resolve();
     };
 
     try {
       const tx = db.transaction(STORE_NAME, "readwrite");
-      const store = tx.objectStore(STORE_NAME);
-      const read = store.get(COUNT_KEY);
-
-      let next = 0;
-
-      read.onsuccess = () => {
-        const current = typeof read.result === "number" ? read.result : readFallback();
-        next = current + 1;
-        store.put(next, COUNT_KEY);
-      };
-
-      read.onerror = () => {
-        next = readFallback() + 1;
-      };
-
-      tx.oncomplete = () => finish(next);
-      tx.onerror = () => finish(next || readFallback() + 1);
-      tx.onabort = () => finish(next || readFallback() + 1);
+      tx.objectStore(STORE_NAME).put(value, COUNT_KEY);
+      tx.oncomplete = finish;
+      tx.onerror = finish;
+      tx.onabort = finish;
     } catch {
-      finish(readFallback() + 1);
+      finish();
     }
+  });
+}
+
+/** Serialises read-modify-write cycles so a double click cannot double-count. */
+let queue: Promise<unknown> = Promise.resolve();
+
+function serialize<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task, task);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+export async function readGenerationsUsed(): Promise<number> {
+  const stored = await readStored();
+  const cookie = readCookie();
+  const value = Math.max(stored, cookie, readFallback());
+
+  // Keep both layers in sync with the highest value we have seen.
+  if (cookie !== value) writeCookie(value);
+  if (stored !== value) void writeStored(value);
+
+  return value;
+}
+
+export function incrementGenerationsUsed(): Promise<number> {
+  return serialize(async () => {
+    const current = await readGenerationsUsed();
+    const next = current + 1;
+
+    await writeStored(next);
+    writeCookie(next);
+
+    return next;
   });
 }
