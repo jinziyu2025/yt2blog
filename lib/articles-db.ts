@@ -57,21 +57,52 @@ export async function publishArticle(
     meta_description: post.intro.replace(/\s+/g, " ").trim().slice(0, 200),
   };
 
+  console.log("[supabase] publish start", {
+    table: ARTICLES_TABLE,
+    baseSlug: base,
+    videoId: post.videoId,
+    titleLength: post.title.length,
+    metaDescriptionLength: row.meta_description.length,
+  });
+
   for (const slug of candidates) {
-    const { error } = await client
-      .from(ARTICLES_TABLE)
-      .insert({ ...row, slug })
-      .select("slug")
-      .single();
+    console.log("[supabase] insert attempt", { slug });
 
-    if (!error) return slug;
+    try {
+      const { data, error } = await client
+        .from(ARTICLES_TABLE)
+        .insert({ ...row, slug })
+        .select("slug")
+        .single();
 
-    if (error.code !== UNIQUE_VIOLATION) {
-      console.error(`[supabase] insert failed slug=${slug} code=${error.code} message=${error.message}`);
-      return null;
+      if (!error) {
+        console.log("[supabase] insert ok", { slug, returned: data?.slug ?? null });
+        return slug;
+      }
+
+      console.error("[supabase] insert failed", {
+        slug,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+
+      if (error.code !== UNIQUE_VIOLATION) {
+        return null;
+      }
+
+      console.warn("[supabase] slug already taken, retrying with a suffix", { slug });
+    } catch (caught) {
+      console.error("[supabase] insert threw", {
+        slug,
+        message: caught instanceof Error ? caught.message : String(caught),
+        stack: caught instanceof Error ? caught.stack : undefined,
+      });
     }
   }
 
+  console.error("[supabase] publish aborted: every slug candidate failed");
   return null;
 }
 

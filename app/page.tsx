@@ -523,7 +523,17 @@ export default function HomePage() {
 
       if (supabase) {
         publishedSlug = await publishArticle(supabase, result);
+      } else {
+        console.warn(
+          "[publish] Supabase is not configured (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY); falling back to the localStorage article page."
+        );
       }
+
+      console.log("[publish] result", {
+        slug: publishedSlug,
+        fallbackVideoId: result.videoId,
+        destination: publishedSlug ? `/blog/${publishedSlug}` : `/article/${result.videoId}`,
+      });
 
       setStatus("idle");
       router.push(
