@@ -7,6 +7,8 @@ import { useEffect, useRef, useState } from "react";
 import { getAffiliateRef } from "@/lib/affiliate";
 import { startPaddleCheckout } from "@/lib/paddle";
 import { saveArticle, type BlogPost } from "@/lib/article";
+import { publishArticle } from "@/lib/articles-db";
+import { getSupabaseBrowserClient } from "@/lib/supabase";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -653,11 +655,21 @@ export default function HomePage() {
 
       clearFlushTimer();
 
-      // Hand the finished draft to its own route; the homepage stays a clean
-      // generator form.
+      // Persist the draft so it gets a real, shareable /blog/<slug> URL.
+      // localStorage stays as a fallback when Supabase is not configured.
       saveArticle(result);
+
+      let publishedSlug: string | null = null;
+      const supabase = getSupabaseBrowserClient();
+
+      if (supabase) {
+        publishedSlug = await publishArticle(supabase, result);
+      }
+
       setStatus("idle");
-      router.push(`/article/${result.videoId}`);
+      router.push(
+        publishedSlug ? `/blog/${publishedSlug}` : `/article/${result.videoId}`
+      );
     } catch (caught) {
       clearFlushTimer();
 

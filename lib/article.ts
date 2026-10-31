@@ -38,6 +38,45 @@ export function buildArticleText(post: BlogPost): string {
 }
 
 /**
+ * Markdown body stored in Supabase: intro first, then one `## heading`
+ * section per article section, with the conclusion kept as its own section.
+ */
+export function buildMarkdown(post: BlogPost): string {
+  const parts: string[] = [post.intro.trim()];
+
+  post.sections.forEach((section) => {
+    parts.push(`## ${section.heading.trim()}\n\n${section.body.trim()}`);
+  });
+
+  parts.push(`## Final thought\n\n${post.conclusion.trim()}`);
+
+  return parts.join("\n\n");
+}
+
+export function parseArticleMarkdown(content: string): {
+  intro: string;
+  sections: BlogSection[];
+} {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  const blocks = normalized.split("\n## ");
+
+  const intro = blocks[0].replace(/^## /, "").trim();
+
+  const sections = blocks.slice(1).map((block) => {
+    const breakIndex = block.indexOf("\n");
+    if (breakIndex === -1) {
+      return { heading: block.trim(), body: "" };
+    }
+    return {
+      heading: block.slice(0, breakIndex).trim(),
+      body: block.slice(breakIndex + 1).trim(),
+    };
+  });
+
+  return { intro, sections };
+}
+
+/**
  * The generated draft is handed from the homepage to /article/[id] through
  * localStorage (there is no server-side store). Keyed by videoId so the same
  * video can be revisited; a refreshed page still finds its article.
