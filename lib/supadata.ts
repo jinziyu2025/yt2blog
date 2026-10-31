@@ -6,7 +6,8 @@
  *
  * Flow: videoId -> GET /v1/transcript (plain text, English preferred) ->
  * Supadata answers synchronously, or hands back a jobId that is polled until
- * completed. The resulting text is truncated and handed to DeepSeek.
+ * completed. The full transcript is returned untruncated: long videos are
+ * chunked and map-reduced in /api/generate.
  *
  * Requires SUPADATA_API_KEY (see .env.example).
  */
@@ -17,11 +18,6 @@ const ENDPOINT = "https://api.supadata.ai/v1/transcript";
 const REQUEST_TIMEOUT_MS = 25_000;
 const JOB_POLL_INTERVAL_MS = 2_000;
 const JOB_MAX_WAIT_MS = 20_000;
-
-// Keep the transcript within a sane token budget before injecting it.
-const MAX_TRANSCRIPT_CHARS = 14_000;
-const TRANSCRIPT_HEAD_CHARS = 9_000;
-const TRANSCRIPT_TAIL_CHARS = 4_000;
 
 export type TranscriptResult =
   | {
@@ -172,15 +168,6 @@ function extractText(content: unknown): { text: string; segments: number } {
   return { text: "", segments: 0 };
 }
 
-export function truncateTranscript(text: string): string {
-  if (text.length <= MAX_TRANSCRIPT_CHARS) return text;
-
-  const head = text.slice(0, TRANSCRIPT_HEAD_CHARS);
-  const tail = text.slice(text.length - TRANSCRIPT_TAIL_CHARS);
-
-  return `${head}\n\n[... middle of the transcript omitted for length ...]\n\n${tail}`;
-}
-
 function buildUrl(videoId: string, mode: "native" | "auto"): string {
   const params = new URLSearchParams({
     url: `https://www.youtube.com/watch?v=${videoId}`,
@@ -268,21 +255,19 @@ export async function fetchEnglishTranscript(videoId: string): Promise<Transcrip
           return { ok: false, status: job.status, message: job.message };
         }
 
-        const truncated = truncateTranscript(job.text);
+        const full = job.text;
         console.log(
           `${LOG_PREFIX} ok videoId=${videoId} via=job lang=${job.lang} segments=${job.segments} chars=${
-            job.text.length
-          } injectedChars=${truncated.length} truncated=${truncated.length !== job.text.length} fetchMs=${
-            Date.now() - startedAt
-          }`
+            full.length
+          } truncated=false fetchMs=${Date.now() - startedAt}`
         );
 
         return {
           ok: true,
-          text: truncated,
+          text: full,
           lang: job.lang,
           segments: job.segments,
-          originalChars: job.text.length,
+          originalChars: full.length,
         };
       }
 
@@ -301,19 +286,16 @@ export async function fetchEnglishTranscript(videoId: string): Promise<Transcrip
       const available = Array.isArray(payload.availableLangs)
         ? payload.availableLangs.map((item) => asString(item)).filter(Boolean)
         : [];
-      const truncated = truncateTranscript(text);
 
       console.log(
         `${LOG_PREFIX} ok videoId=${videoId} via=sync lang=${lang} available=${available.join(",") || "n/a"} segments=${segments} chars=${
           text.length
-        } injectedChars=${truncated.length} truncated=${truncated.length !== text.length} fetchMs=${
-          Date.now() - startedAt
-        }`
+        } truncated=false fetchMs=${Date.now() - startedAt}`
       );
 
       return {
         ok: true,
-        text: truncated,
+        text,
         lang,
         segments,
         originalChars: text.length,

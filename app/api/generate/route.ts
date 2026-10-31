@@ -17,14 +17,32 @@ const DEEPSEEK_TIMEOUT_MS = 180_000;
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
 // deepseek-flash emits reasoning_content, and reasoning tokens share the same
-// max_tokens budget as content. With a real (long) transcript the model spends
-// 4,000-7,000 tokens reasoning alone, so the budget must cover reasoning plus a
-// ~1,300-token article.
-const MAX_TOKENS_FIRST = 8_000;
-const MAX_TOKENS_RETRY = 10_000;
+// max_tokens budget as content. Measured on a ~35k-char transcript through the
+// map-reduce path: reasoning alone ranged 4,000-9,000 tokens before the first
+// content token, and 8,000/10,000 cut the article off mid-sentence. The budget
+// must cover reasoning plus a ~1,300-token article with margin.
+const MAX_TOKENS_FIRST = 12_000;
+const MAX_TOKENS_RETRY = 16_000;
 const MIN_ACCEPTABLE_WORDS = 600;
 
-// Transcript fetch + truncation live in lib/supadata.ts (Supadata API).
+// Long videos: the transcript is chunked and map-reduced before the final write.
+// Slices target 1,500-2,000 characters; there is no upper length limit, a long
+// video just produces more slices.
+const CHUNK_MIN_CHARS = 1_500;
+const CHUNK_MAX_CHARS = 2_000;
+const MAP_CONCURRENCY = 4;
+// Slice notes are short, but reasoning shares this budget. At 2,000 some slices
+// exhausted it on reasoning and returned an empty completion.
+const MAP_MAX_TOKENS = 3_000;
+const MAP_TIMEOUT_MS = 120_000;
+const LOG_PREFIX_MAP = "[map]";
+
+// The map phase can run for minutes without emitting a token. SSE comments
+// keep Render's proxy (and any intermediate hop) from dropping an idle stream.
+const HEARTBEAT_MS = 15_000;
+
+// Transcript fetch lives in lib/supadata.ts (Supadata API). No truncation:
+// arbitrarily long transcripts go through the map-reduce phase below.
 
 // No caching: every request fetches the real transcript and calls DeepSeek.
 // In-flight de-duplication below is memory-only (no disk writes).
@@ -257,6 +275,8 @@ function buildSystemPrompt(): string {
     "- Assert, do not report: write \"The AI feature is not shipping.\" instead of \"It can be said that ...\" or \"The creator states that ...\". Do not follow an assertion with a summary line that explains it.",
     "- A judgment can carry an attitude word (sharp, sloppy, lazy, genuinely good, unfinished) as long as no fact is invented.",
     "",
+    "Source shape: long videos reach you as consolidated notes written slice by slice. Treat those notes as raw material, never as structure. Reorder them around your own thread, drop repeated points, and carry one voice from the first line to the last so the article never reads like separate summaries glued together.",
+    "",
     "Banned words and moves (never use them):",
     "- \"The creator\", \"the content creator\", \"the video\" used as a generic subject.",
     "- \"makes the video worth watching\" filler. Name the footage, the episode, or the shot he is looking at.",
@@ -299,25 +319,36 @@ function buildUserPrompt(options: {
   videoId: string;
   transcript: string;
   retry: boolean;
+  mapped: boolean;
   reviseNote?: string;
 }): string {
+  const sourceLabel = options.mapped
+    ? "CONSOLIDATED NOTES (written slice by slice from the full transcript):"
+    : "VIDEO TRANSCRIPT (source material):";
+
   const lines = [
     `Source video: ${options.url}`,
     `Video ID: ${options.videoId}`,
     "",
-    "VIDEO TRANSCRIPT (source material):",
+    sourceLabel,
     '"""',
     options.transcript,
     '"""',
     "",
-    "Write the full 800-1,000 word English SEO article based on this transcript now.",
+    "Write the full 800-1,000 word English SEO article based on this source material now.",
   ];
+
+  if (options.mapped) {
+    lines.push(
+      "These notes came from a chunked pass, so they must NOT be stitched together in order. Reorganize them into one continuous train of thought, merge repeated points, and write as a single person talking from the first line to the last. Never mention slices, chunks, notes, or summarising."
+    );
+  }
 
   if (options.reviseNote) {
     lines.push(
       "STYLE FIX REQUIRED: the previous draft broke the tone rules listed below.",
       options.reviseNote,
-      "Output the <persona>, <title>, <slug> and <meta> tag lines first, then the markdown body. Use only facts from the transcript above."
+      "Output the <persona>, <title>, <slug> and <meta> tag lines first, then the markdown body. Use only facts from the source material above."
     );
   } else if (options.retry) {
     lines.push(
@@ -858,6 +889,290 @@ type StreamCallResult = {
   elapsedMs: number;
 };
 
+/* ------------------------------------------------------------------ */
+/*  Map phase: chunk the transcript, de-AI each slice                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Greedily pack sentences into slices no longer than `maxChars`. A single
+ * monster sentence is hard-split on word boundaries so it can never blow the
+ * limit.
+ */
+function packSentences(sentences: string[], maxChars: number): string[] {
+  const chunks: string[] = [];
+  let buffer = "";
+
+  const push = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) chunks.push(trimmed);
+  };
+
+  for (const sentence of sentences) {
+    if (sentence.length > maxChars) {
+      push(buffer);
+      buffer = "";
+
+      let part = "";
+      for (const word of sentence.split(" ")) {
+        const next = part ? `${part} ${word}` : word;
+        if (next.length > maxChars) {
+          push(part);
+          part = word;
+        } else {
+          part = next;
+        }
+      }
+      buffer = part;
+      continue;
+    }
+
+    const next = buffer ? `${buffer} ${sentence}` : sentence;
+    if (next.length > maxChars) {
+      push(buffer);
+      buffer = sentence;
+    } else {
+      buffer = next;
+    }
+  }
+
+  push(buffer);
+  return chunks;
+}
+
+/**
+ * Split the transcript into 1,500-2,000 character slices on sentence
+ * boundaries. No length cap: a three-hour video simply produces more slices.
+ * A short trailing slice is rebalanced with its neighbour instead of being
+ * sent to the model as a stray fragment.
+ */
+function splitTranscript(text: string): string[] {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  if (normalized.length <= CHUNK_MAX_CHARS) return [normalized];
+
+  const chunks = packSentences(splitSentences(normalized), CHUNK_MAX_CHARS);
+
+  if (chunks.length > 1 && chunks[chunks.length - 1].length < CHUNK_MIN_CHARS) {
+    const tail = chunks.pop() ?? "";
+    const previous = chunks.pop() ?? "";
+    const combined = `${previous} ${tail}`.trim();
+    const half = combined.length / 2;
+
+    // Cut at the sentence boundary closest to the halfway point so both
+    // rebalanced slices end up near the target size instead of one big slice
+    // plus a tiny remainder.
+    const sentences = splitSentences(combined);
+    let accumulated = 0;
+    let cut = 1;
+    let bestDiff = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < sentences.length; index += 1) {
+      accumulated += sentences[index].length + 1;
+      const diff = Math.abs(accumulated - half);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        cut = index + 1;
+      }
+      if (accumulated > half) break;
+    }
+
+    const first = sentences.slice(0, cut).join(" ").trim();
+    const second = sentences.slice(cut).join(" ").trim();
+
+    if (first && second) {
+      chunks.push(first, second);
+    } else {
+      chunks.push(combined);
+    }
+  }
+
+  return chunks;
+}
+
+function buildChunkSystemPrompt(): string {
+  return [
+    "You are taking working notes for a blog writer. You get one slice of a YouTube transcript and write the notes they will use later.",
+    "",
+    "Rules:",
+    "- Write in first or second person, present tense, talking out loud: I noticed, I found, you would think, we ended up.",
+    "- Every sentence needs a visible subject (I, you, we, or a named person). No headline fragments, no noun phrases standing alone.",
+    "- Keep every concrete fact from this slice: numbers, names, prices, examples, comparisons, doubts. Do not smooth them away.",
+    "- No antithesis or balanced pairs (\"not X but Y\", \"No X, no Y\", \"less X, more Y\"). No anaphora runs, no three clauses cut from one template.",
+    "- Use natural filler now and then: Honestly, You know, I mean, To be fair, kind of, sort of.",
+    "- Plain verbs beat decoration. At most one short comparison in these notes.",
+    "- No meta commentary, no headings, no bullet lists, no JSON. Just the notes.",
+    "",
+    "Output 90-160 words of plain conversational prose.",
+  ].join("\n");
+}
+
+function buildChunkUserPrompt(index: number, total: number, chunk: string): string {
+  return [
+    `Slice ${index + 1} of ${total} from the same video. Write the notes for this slice now.`,
+    '"""',
+    chunk,
+    '"""',
+    "Stay strictly inside this slice: do not invent context from earlier or later parts.",
+  ].join("\n");
+}
+
+async function summarizeChunk(options: {
+  apiKey: string;
+  model: string;
+  chunk: string;
+  index: number;
+  total: number;
+  signal: AbortSignal;
+}): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MAP_TIMEOUT_MS);
+  const forwardAbort = () => controller.abort();
+  options.signal.addEventListener("abort", forwardAbort);
+
+  try {
+    const response = await fetch(DEEPSEEK_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${options.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: options.model,
+        messages: [
+          { role: "system", content: buildChunkSystemPrompt() },
+          {
+            role: "user",
+            content: buildChunkUserPrompt(options.index, options.total, options.chunk),
+          },
+        ],
+        temperature: 0.7,
+        max_tokens: MAP_MAX_TOKENS,
+        stream: false,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const raw = await response.text();
+      throw new HttpError(
+        response.status >= 400 && response.status <= 599 ? response.status : 502,
+        upstreamErrorMessage(response.status, raw, options.model)
+      );
+    }
+
+    const raw = await response.text();
+    let parsed: { choices?: Array<{ message?: { content?: unknown } }> };
+    try {
+      parsed = JSON.parse(raw) as typeof parsed;
+    } catch {
+      return "";
+    }
+
+    const content = parsed.choices?.[0]?.message?.content;
+    return typeof content === "string" ? content.trim() : "";
+  } finally {
+    clearTimeout(timer);
+    options.signal.removeEventListener("abort", forwardAbort);
+  }
+}
+
+type MapResult = {
+  text: string;
+  chunks: number;
+  failed: number;
+  mapMs: number;
+};
+
+/**
+ * Map-Reduce, part 1: every slice becomes de-AI'd notes written in a human
+ * voice. Slices are processed with a small worker pool to keep latency sane.
+ */
+async function mapTranscript(options: {
+  transcript: string;
+  apiKey: string;
+  model: string;
+  videoId: string;
+  signal: AbortSignal;
+}): Promise<MapResult> {
+  const chunks = splitTranscript(options.transcript);
+
+  if (chunks.length <= 1) {
+    return { text: options.transcript, chunks: chunks.length, failed: 0, mapMs: 0 };
+  }
+
+  const startedAt = Date.now();
+  console.log(
+    `${LOG_PREFIX_MAP} start videoId=${options.videoId} chars=${options.transcript.length} chunks=${chunks.length} concurrency=${MAP_CONCURRENCY}`
+  );
+
+  const notes = new Array<string>(chunks.length);
+  let cursor = 0;
+  let failed = 0;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      if (options.signal.aborted) return;
+      const index = cursor;
+      cursor += 1;
+      if (index >= chunks.length) return;
+
+      try {
+        notes[index] = await summarizeChunk({
+          apiKey: options.apiKey,
+          model: options.model,
+          chunk: chunks[index],
+          index,
+          total: chunks.length,
+          signal: options.signal,
+        });
+
+        if (!notes[index]) {
+          notes[index] = chunks[index];
+          console.log(
+            `${LOG_PREFIX_MAP} empty-slice videoId=${options.videoId} chunk=${index + 1}/${chunks.length} fallback=raw`
+          );
+        } else {
+          console.log(
+            `${LOG_PREFIX_MAP} slice videoId=${options.videoId} chunk=${index + 1}/${chunks.length} chars=${
+              chunks[index].length
+            } notes=${notes[index].length}`
+          );
+        }
+      } catch (caught) {
+        if (options.signal.aborted) return;
+        failed += 1;
+        notes[index] = chunks[index];
+        const message = caught instanceof Error ? caught.message : String(caught);
+        console.log(
+          `${LOG_PREFIX_MAP} slice-failed videoId=${options.videoId} chunk=${index + 1}/${chunks.length} message=${message.slice(0, 120)} fallback=raw`
+        );
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(MAP_CONCURRENCY, chunks.length) }, () => worker())
+  );
+
+  if (options.signal.aborted) {
+    throw new HttpError(499, "Client closed the request during the map phase.");
+  }
+
+  const merged = notes.filter(Boolean).join("\n\n").trim();
+  const mapMs = Date.now() - startedAt;
+
+  console.log(
+    `${LOG_PREFIX_MAP} done videoId=${options.videoId} chunks=${chunks.length} failed=${failed} notesChars=${merged.length} mapMs=${mapMs}`
+  );
+
+  return {
+    text: merged || options.transcript,
+    chunks: chunks.length,
+    failed,
+    mapMs,
+  };
+}
+
 async function streamDeepSeek(options: {
   apiKey: string;
   model: string;
@@ -1000,14 +1315,31 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
   let lastFailure = "";
   let reviseNote: string | undefined;
 
+  // Map-Reduce, part 1: long transcripts are sliced and de-AI'd before the
+  // final write. Short transcripts skip the map phase entirely.
+  const mapped = await mapTranscript({
+    transcript: options.transcript,
+    apiKey: options.apiKey,
+    model: options.model,
+    videoId: options.videoId,
+    signal: options.signal,
+  });
+  const sourceText = mapped.text;
+  const isMapped = mapped.chunks > 1;
+
+  console.log(
+    `${LOG_PREFIX_MAP} source videoId=${options.videoId} mapped=${isMapped} chunks=${mapped.chunks} sourceChars=${sourceText.length}`
+  );
+
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const retry = attempt > 0;
     const maxTokens = retry ? MAX_TOKENS_RETRY : MAX_TOKENS_FIRST;
     const userPrompt = buildUserPrompt({
       url: options.url,
       videoId: options.videoId,
-      transcript: options.transcript,
+      transcript: sourceText,
       retry,
+      mapped: isMapped,
       reviseNote,
     });
 
@@ -1372,6 +1704,13 @@ export async function POST(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let closed = false;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+      const stopHeartbeat = () => {
+        if (heartbeat === null) return;
+        clearInterval(heartbeat);
+        heartbeat = null;
+      };
 
       const send = (event: string, data: unknown) => {
         if (closed) return;
@@ -1383,6 +1722,7 @@ export async function POST(request: Request) {
       };
 
       const close = () => {
+        stopHeartbeat();
         if (closed) return;
         closed = true;
         try {
@@ -1391,6 +1731,26 @@ export async function POST(request: Request) {
           // Already closed.
         }
       };
+
+      // The map phase (and DeepSeek's reasoning phase) can stay silent for
+      // minutes on long videos. A comment frame is ignored by the client parser
+      // but keeps intermediaries from closing an idle connection.
+      heartbeat = setInterval(() => {
+        if (closed) {
+          stopHeartbeat();
+          return;
+        }
+        if (firstDeltaMs !== null) {
+          stopHeartbeat();
+          return;
+        }
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          closed = true;
+          stopHeartbeat();
+        }
+      }, HEARTBEAT_MS);
 
       const sendDone = (post: BlogPost, cachedFlag: boolean) => {
         send("done", {
@@ -1484,6 +1844,7 @@ export async function POST(request: Request) {
         send("error", { message, code });
         close();
       } finally {
+        stopHeartbeat();
         request.signal.removeEventListener("abort", onClientAbort);
       }
     },
