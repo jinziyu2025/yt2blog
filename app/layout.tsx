@@ -11,6 +11,9 @@ export const metadata: Metadata = {
   description:
     "Tired of tools with 30-min limits? Use our AI to generate human-like, SEO-friendly blog posts from any YouTube video or podcast. Try 2 for free!",
   applicationName: "YT2Blog",
+  verification: {
+    google: "z5ojO7htlnCIzosrH3Au6UmsXbOqnQovaiP1p_MBjDQ",
+  },
   keywords: [
     "YouTube to blog",
     "video to article",
