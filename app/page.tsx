@@ -1,35 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { getAffiliateRef } from "@/lib/affiliate";
 import { startPaddleCheckout } from "@/lib/paddle";
-import CopyrightDisclaimer from "@/components/copyright-disclaimer";
+import { saveArticle, type BlogPost } from "@/lib/article";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
 
-type BlogSection = {
-  heading: string;
-  body: string;
-};
-
-type BlogPost = {
-  videoId: string;
-  title: string;
-  slug: string;
-  metaDescription: string;
-  intro: string;
-  sections: BlogSection[];
-  conclusion: string;
-  wordCount: number;
-  readingMinutes: number;
-  generatedAt: string;
-};
-
-type Status = "idle" | "loading" | "streaming" | "success" | "error";
+type Status = "idle" | "loading" | "streaming" | "error";
 
 type StreamMeta = {
   title: string;
@@ -37,8 +20,6 @@ type StreamMeta = {
   metaDescription: string;
   cached?: boolean;
 };
-
-type CopyFeedback = "article" | "meta" | "error" | null;
 
 /* ------------------------------------------------------------------ */
 /*  URL validation (client-side, for instant inline feedback)          */
@@ -122,27 +103,6 @@ function parseYouTubeUrl(raw: string): {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-
-function buildArticleText(post: BlogPost): string {
-  const lines: string[] = [
-    post.title,
-    "",
-    `Suggested slug: /blog/${post.slug}`,
-    `Meta description: ${post.metaDescription}`,
-    "",
-    post.intro,
-    "",
-  ];
-
-  post.sections.forEach((section) => {
-    lines.push(section.heading, "", section.body, "");
-  });
-
-  lines.push("Final thought", "", post.conclusion, "");
-  lines.push(`Source: https://youtube.com/watch?v=${post.videoId}`);
-
-  return lines.join("\n");
-}
 
 /**
  * Streaming generation request.
@@ -319,24 +279,6 @@ function Spinner() {
   );
 }
 
-function CopyIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="9" y="9" width="11" height="11" rx="2.5" />
-      <path d="M5 15V5.5A2.5 2.5 0 0 1 7.5 3H15" />
-    </svg>
-  );
-}
-
 function RefreshIcon() {
   return (
     <svg
@@ -382,9 +324,6 @@ function AlertIcon() {
 
 const GHOST_BUTTON =
   "inline-flex items-center gap-1.5 rounded-lg border border-line bg-white/[0.02] px-3 py-1.5 text-xs text-muted transition hover:bg-white/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-
-const SOLID_BUTTON =
-  "inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-[#0B0B0C] transition hover:bg-[#E7FF70] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-surface";
 
 // Rotating status copy shown in the article area while the pipeline runs.
 // One step every 3 seconds, looping until the first streamed character lands.
@@ -630,13 +569,12 @@ function PaywallModal({
 }
 
 export default function HomePage() {
+  const router = useRouter();
   const [url, setUrl] = useState("");
   const [status, setStatus] = useState<Status>("idle");
-  const [post, setPost] = useState<BlogPost | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [activeUrl, setActiveUrl] = useState("");
-  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
 
   // Live stream state: title lands first, body text is appended in batches.
   const [streamTitle, setStreamTitle] = useState("");
@@ -687,8 +625,6 @@ export default function HomePage() {
     setReviseNotice("");
     setStatus("loading");
     setErrorMessage("");
-    setPost(null);
-    setCopyFeedback(null);
 
     try {
       const result = await streamBlogPost(sourceUrl, {
@@ -716,8 +652,12 @@ export default function HomePage() {
       });
 
       clearFlushTimer();
-      setPost(result);
-      setStatus("success");
+
+      // Hand the finished draft to its own route; the homepage stays a clean
+      // generator form.
+      saveArticle(result);
+      setStatus("idle");
+      router.push(`/article/${result.videoId}`);
     } catch (caught) {
       clearFlushTimer();
 
@@ -776,57 +716,9 @@ export default function HomePage() {
     abortRef.current?.abort();
   }
 
-  function handleRegenerate() {
-    if (!activeUrl || isGenerating) return;
-    void runGenerate(activeUrl, true);
-  }
-
   function handleRetry() {
     if (!activeUrl) return;
     void runGenerate(activeUrl);
-  }
-
-  function flashCopy(feedback: Exclude<CopyFeedback, null>) {
-    setCopyFeedback(feedback);
-    window.setTimeout(() => setCopyFeedback(null), 1800);
-  }
-
-  async function copyToClipboard(text: string): Promise<boolean> {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // Fall through to the legacy path below.
-    }
-
-    try {
-      const helper = document.createElement("textarea");
-      helper.value = text;
-      helper.setAttribute("readonly", "");
-      helper.style.position = "fixed";
-      helper.style.opacity = "0";
-      document.body.appendChild(helper);
-      helper.select();
-      const ok = document.execCommand("copy");
-      document.body.removeChild(helper);
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async function handleCopyArticle() {
-    if (!post) return;
-    const ok = await copyToClipboard(buildArticleText(post));
-    flashCopy(ok ? "article" : "error");
-  }
-
-  async function handleCopyMeta() {
-    if (!post) return;
-    const ok = await copyToClipboard(post.metaDescription);
-    flashCopy(ok ? "meta" : "error");
   }
 
   useEffect(() => {
@@ -1188,129 +1080,6 @@ export default function HomePage() {
               </button>
             </div>
           </section>
-        )}
-
-        {/* Article */}
-        {status === "success" && post && (
-          <>
-          <article className="mt-12 animate-fade-up overflow-hidden rounded-2xl border border-line bg-surface">
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5 sm:px-8">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.03] px-2 py-1 text-[10.5px] uppercase tracking-[0.12em]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-                  Draft ready
-                </span>
-                <span className="text-muted/40">·</span>
-                <span>{post.wordCount} words</span>
-                <span className="text-muted/40">·</span>
-                <span>{post.readingMinutes} min read</span>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleRegenerate}
-                  className={GHOST_BUTTON}
-                >
-                  <RefreshIcon />
-                  Regenerate
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCopyArticle}
-                  className={SOLID_BUTTON}
-                >
-                  <CopyIcon />
-                  {copyFeedback === "article"
-                    ? "Copied"
-                    : copyFeedback === "error"
-                      ? "Copy failed"
-                      : "Copy article"}
-                </button>
-              </div>
-            </div>
-
-            {/* Body */}
-            <div className="px-5 py-8 sm:px-10 sm:py-10">
-              <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted/70">
-                <span className="rounded-md border border-line bg-black/30 px-2 py-1 text-ink/70">
-                  /blog/{post.slug}
-                </span>
-                <span className="text-muted/50">suggested permalink</span>
-              </div>
-
-              <h2 className="mt-5 text-[26px] font-semibold leading-[1.2] tracking-[-0.02em] text-ink sm:text-[34px]">
-                {post.title}
-              </h2>
-
-              {/* Meta description */}
-              <div className="mt-6 rounded-xl border border-line bg-black/25 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10.5px] uppercase tracking-[0.14em] text-muted">
-                    Meta description
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleCopyMeta}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] text-muted transition hover:bg-white/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  >
-                    <CopyIcon />
-                    {copyFeedback === "meta"
-                      ? "Copied"
-                      : copyFeedback === "error"
-                        ? "Failed"
-                        : "Copy"}
-                  </button>
-                </div>
-                <p className="mt-2 text-[13px] leading-6 text-[#C8C8D0]">
-                  {post.metaDescription}
-                </p>
-                <p className="mt-2 font-mono text-[10px] text-muted/60">
-                  {post.metaDescription.length} chars · target ≤ 160
-                </p>
-              </div>
-
-              <div className="mt-8">
-                <p className="whitespace-pre-wrap text-[15.5px] leading-[1.85] text-[#D6D6DC]">
-                  {post.intro}
-                </p>
-
-                {post.sections.map((section) => (
-                  <section key={section.heading} className="mt-9">
-                    <h3 className="text-[18px] font-semibold tracking-[-0.01em] text-ink">
-                      {section.heading}
-                    </h3>
-                    <p className="mt-3 whitespace-pre-wrap text-[14.5px] leading-[1.85] text-[#B6B6C0]">
-                      {section.body}
-                    </p>
-                  </section>
-                ))}
-
-                <div className="mt-10 rounded-xl border-l-2 border-accent/60 bg-white/[0.025] px-5 py-4">
-                  <p className="text-[10.5px] uppercase tracking-[0.14em] text-muted">
-                    Final thought
-                  </p>
-                  <p className="mt-2 whitespace-pre-wrap text-[14.5px] leading-[1.8] text-[#D6D6DC]">
-                    {post.conclusion}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-5 py-3.5 sm:px-8">
-              <p className="font-mono text-[10.5px] text-muted/60">
-                source · youtube.com/watch?v={post.videoId}
-              </p>
-              <p className="text-[10.5px] text-muted/60">
-                AI draft · edit before publishing
-              </p>
-            </div>
-          </article>
-
-          <CopyrightDisclaimer className="mt-4 px-1" />
-          </>
         )}
 
         {/* Pricing */}
