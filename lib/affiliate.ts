@@ -1,7 +1,7 @@
 /**
  * Affiliate reference tracking.
  *
- * A partner link looks like `https://yt2blog.app/?ref=friend_a`. The value is
+ * A partner link looks like `https://your-site/?ref=friend_a`. The value is
  * persisted in localStorage for 30 days and overwritten on every new ref
  * ("last click wins"), so a partner keeps credit even if the visitor comes
  * back weeks later without the query string.
