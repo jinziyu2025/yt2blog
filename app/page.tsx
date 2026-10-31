@@ -903,9 +903,8 @@ export default function HomePage() {
           </p>
 
           <h1 className="mt-6 text-balance text-3xl font-semibold leading-[1.12] tracking-[-0.03em] text-ink sm:text-[44px]">
-            Turn any YouTube video into a{" "}
-            <span className="text-accent">SEO-friendly</span> blog post in
-            seconds
+            Turn Any YouTube Video into a{" "}
+            <span className="text-accent">Human-Like</span> Blog Post
           </h1>
 
           <p className="mt-5 max-w-xl text-[14.5px] leading-7 text-muted">

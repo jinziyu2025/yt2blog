@@ -2,24 +2,48 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import AffiliateTracker from "@/components/affiliate-tracker";
 import SiteFooter from "@/components/site-footer";
+import { SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "YT2Blog — Turn YouTube videos into SEO-friendly blog posts",
+  metadataBase: new URL(SITE_URL),
+  title: "YT2Blog - Turn YouTube Videos into SEO-Friendly Blogs in Seconds.",
   description:
-    "Paste a YouTube link and get a structured, SEO-friendly blog draft in seconds: title, slug, meta description, headings and body copy, ready to edit.",
+    "Tired of tools with 30-min limits? Use our AI to generate human-like, SEO-friendly blog posts from any YouTube video or podcast. Try 2 for free!",
   applicationName: "YT2Blog",
   keywords: [
     "YouTube to blog",
     "video to article",
+    "YouTube video to blog post",
+    "AI blog generator",
     "SEO content generator",
+    "podcast to blog",
     "creator tools",
   ],
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+    },
+  },
   openGraph: {
-    title: "YT2Blog — Turn YouTube videos into SEO-friendly blog posts",
+    title: "YT2Blog - Turn YouTube Videos into SEO-Friendly Blogs in Seconds.",
     description:
-      "Paste a YouTube link and get a structured, SEO-friendly blog draft in seconds.",
+      "Tired of tools with 30-min limits? Generate human-like, SEO-friendly blog posts from any YouTube video or podcast. Try 2 for free!",
+    url: SITE_URL,
+    siteName: "YT2Blog",
     type: "website",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary",
+    title: "YT2Blog - Turn YouTube Videos into SEO-Friendly Blogs in Seconds.",
+    description:
+      "Generate human-like, SEO-friendly blog posts from any YouTube video or podcast. Try 2 for free!",
   },
   icons: {
     icon: [
