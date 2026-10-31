@@ -14,6 +14,11 @@ export const metadata: Metadata = {
   verification: {
     google: "z5ojO7htlnCIzosrH3Au6UmsXbOqnQovaiP1p_MBjDQ",
   },
+  // Relative canonical: Next resolves "./" against metadataBase using the
+  // current route, so every page emits its own absolute canonical URL.
+  alternates: {
+    canonical: "./",
+  },
   keywords: [
     "YouTube to blog",
     "video to article",
