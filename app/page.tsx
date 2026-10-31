@@ -10,6 +10,7 @@ import { saveArticle } from "@/lib/article";
 import { publishArticle } from "@/lib/articles-db";
 import { getSupabaseBrowserClient } from "@/lib/supabase";
 import { streamBlogPost } from "@/lib/generate-client";
+import { incrementGenerationsUsed, readGenerationsUsed } from "@/lib/usage-db";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -196,33 +197,15 @@ const LOADING_STEPS = [
   "Polishing English phrasing...",
 ];
 
-// Free plan: two generations per browser, tracked in localStorage.
+// Free plan: two generations per browser, counter kept in IndexedDB so that
+// clearing the HTTP cache does not reset it.
 const FREE_LIMIT = 2;
-const USAGE_STORAGE_KEY = "yt2blog:generations-used";
 
 const PLAN_FEATURES = [
   "Unlimited AI Blog Posts",
   "Real YouTube Transcript Fetching",
   "No Watermark",
 ];
-
-function readUsage(): number {
-  try {
-    const raw = window.localStorage.getItem(USAGE_STORAGE_KEY);
-    const value = Number.parseInt(raw ?? "0", 10);
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function writeUsage(value: number) {
-  try {
-    window.localStorage.setItem(USAGE_STORAGE_KEY, String(value));
-  } catch {
-    // Private mode or storage disabled: the gate still works for this session.
-  }
-}
 
 function CheckIcon() {
   return (
@@ -327,6 +310,10 @@ function PaywallModal({
           Unlock Unlimited Power
           <span className="text-accent">*</span>
         </h2>
+
+        <p className="relative mt-2 text-[12.5px] leading-5 text-muted">
+          Free limit reached. Please upgrade.
+        </p>
 
         <p className="relative mt-3 text-[12.5px] font-semibold leading-6 text-red-400">
           🔥 Only 10 Early Bird spots left at $9.9/month!
@@ -565,7 +552,7 @@ export default function HomePage() {
     }
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const parsed = parseYouTubeUrl(url);
@@ -575,7 +562,7 @@ export default function HomePage() {
       return;
     }
 
-    const used = readUsage();
+    const used = await readGenerationsUsed();
 
     // Free tier exhausted: block the request and show the paywall instead.
     if (used >= FREE_LIMIT) {
@@ -585,8 +572,8 @@ export default function HomePage() {
       return;
     }
 
-    writeUsage(used + 1);
-    setUsage(used + 1);
+    const next = await incrementGenerationsUsed();
+    setUsage(next);
 
     setFieldError(null);
     setActiveUrl(url.trim());
@@ -621,9 +608,9 @@ export default function HomePage() {
     return () => window.clearInterval(timer);
   }, [status]);
 
-  // Restore the free-tier counter from localStorage on first paint.
+  // Restore the free-tier counter from IndexedDB on first paint.
   useEffect(() => {
-    setUsage(readUsage());
+    void readGenerationsUsed().then(setUsage);
   }, []);
 
   useEffect(() => {
