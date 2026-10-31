@@ -1,5 +1,6 @@
 import Link from "next/link";
 import AffiliateBadge from "@/components/affiliate-badge";
+import CopyrightDisclaimer from "@/components/copyright-disclaimer";
 
 const LEGAL_LINKS = [
   { href: "/terms", label: "Terms of Service" },
@@ -84,6 +85,7 @@ export default function SiteFooter() {
           <div className="mt-1.5">
             <AffiliateBadge />
           </div>
+          <CopyrightDisclaimer className="mt-3 max-w-2xl" />
         </div>
       </div>
     </footer>

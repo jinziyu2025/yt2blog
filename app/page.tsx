@@ -5,6 +5,7 @@ import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { getAffiliateRef } from "@/lib/affiliate";
 import { startPaddleCheckout } from "@/lib/paddle";
+import CopyrightDisclaimer from "@/components/copyright-disclaimer";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -1192,6 +1193,7 @@ export default function HomePage() {
 
         {/* Article */}
         {status === "success" && post && (
+          <>
           <article className="mt-12 animate-fade-up overflow-hidden rounded-2xl border border-line bg-surface">
             {/* Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5 sm:px-8">
@@ -1307,6 +1309,9 @@ export default function HomePage() {
               </p>
             </div>
           </article>
+
+          <CopyrightDisclaimer className="mt-4 px-1" />
+          </>
         )}
 
         {/* Pricing */}
