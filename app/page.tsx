@@ -503,7 +503,11 @@ export default function HomePage() {
 
       // Persist the draft so it gets a real, shareable /blog/<slug> URL.
       // localStorage stays as a fallback when Supabase is not configured.
-      saveArticle(result);
+      try {
+        saveArticle(result);
+      } catch (storageError) {
+        console.error("[publish] localStorage draft skipped", storageError);
+      }
 
       let publishedSlug: string | null = null;
       const supabase = getSupabaseBrowserClient();
@@ -516,16 +520,33 @@ export default function HomePage() {
         );
       }
 
-      console.log("[publish] result", {
-        slug: publishedSlug,
-        fallbackVideoId: result.videoId,
-        destination: publishedSlug ? `/blog/${publishedSlug}` : `/article/${result.videoId}`,
+      const destination = publishedSlug
+        ? `/blog/${publishedSlug}`
+        : `/article/${result.videoId}`;
+
+      console.log("[publish] navigate", {
+        slug: publishedSlug ?? result.slug,
+        videoId: result.videoId,
+        destination,
       });
 
       setStatus("idle");
-      router.push(
-        publishedSlug ? `/blog/${publishedSlug}` : `/article/${result.videoId}`
-      );
+      router.push(destination);
+
+      // Safety net: if the soft navigation does not land (route missing from
+      // the client build, stale router state, blocked push), reload straight
+      // into the destination instead of leaving the user on the generator.
+      window.setTimeout(() => {
+        const current = window.location.pathname;
+
+        if (current !== destination) {
+          console.warn("[publish] soft navigation missed, forcing location change", {
+            destination,
+            current,
+          });
+          window.location.assign(destination);
+        }
+      }, 500);
     } catch (caught) {
       clearFlushTimer();
 
