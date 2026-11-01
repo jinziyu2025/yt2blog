@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { getAffiliateRef } from "@/lib/affiliate";
+import { FeedbackWidget } from "@/components/feedback-widget";
 import { startPaddleCheckout } from "@/lib/paddle";
 import { saveArticle } from "@/lib/article";
 import { publishArticle } from "@/lib/articles-db";
@@ -1042,6 +1043,8 @@ export default function HomePage() {
             </p>
           </div>
         </section>
+
+        <FeedbackWidget />
 
         {/* Paywall */}
         <PaywallModal open={paywallOpen} onClose={() => setPaywallOpen(false)} />
