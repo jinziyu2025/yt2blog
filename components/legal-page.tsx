@@ -93,10 +93,10 @@ export default function LegalPage({
           <p className="mt-2 text-[13px] leading-6 text-[#C8C8D0]">
             Contact us at{" "}
             <a
-              href="mailto:support@yt2blog.app"
+              href="mailto:support@yt2blog.org"
               className="text-ink underline decoration-line underline-offset-2 hover:text-accent"
             >
-              support@yt2blog.app
+              support@yt2blog.org
             </a>{" "}
             and we will reply within two business days.
           </p>

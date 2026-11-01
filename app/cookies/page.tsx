@@ -57,7 +57,7 @@ export default function CookiesPage() {
         {
           heading: "Contact",
           paragraphs: [
-            "Questions about cookies can be sent to support@yt2blog.app. For details about Paddle’s cookies, see Paddle’s own cookie notice.",
+            "Questions about cookies can be sent to support@yt2blog.org. For details about Paddle’s cookies, see Paddle’s own cookie notice.",
           ],
         },
       ]}

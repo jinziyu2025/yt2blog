@@ -66,10 +66,10 @@ export default function SiteFooter() {
                 </li>
                 <li>
                   <a
-                    href="mailto:support@yt2blog.app"
+                    href="mailto:support@yt2blog.org"
                     className="transition hover:text-ink"
                   >
-                    support@yt2blog.app
+                    support@yt2blog.org
                   </a>
                 </li>
               </ul>

@@ -66,7 +66,7 @@ export default function PrivacyPage() {
           heading: "Your Rights",
           paragraphs: [
             "Depending on your jurisdiction you may have the right to access, correct, delete, restrict or object to the processing of your personal data, and to request a portable copy of it.",
-            "To exercise any of these rights, contact support@yt2blog.app. For payment data, you may also contact Paddle directly. You have the right to lodge a complaint with your local data protection authority.",
+            "To exercise any of these rights, contact support@yt2blog.org. For payment data, you may also contact Paddle directly. You have the right to lodge a complaint with your local data protection authority.",
           ],
         },
         {
@@ -96,7 +96,7 @@ export default function PrivacyPage() {
         {
           heading: "Contact",
           paragraphs: [
-            "For privacy questions or data requests, email support@yt2blog.app. We respond within two business days and within the statutory deadlines where applicable.",
+            "For privacy questions or data requests, email support@yt2blog.org. We respond within two business days and within the statutory deadlines where applicable.",
           ],
         },
       ]}

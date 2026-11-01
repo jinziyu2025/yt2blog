@@ -31,7 +31,7 @@ export default function RefundPage() {
         {
           heading: "How to Request a Refund",
           paragraphs: [
-            "Email support@yt2blog.app with the subject line “Refund request”, and include the email address used at checkout and the approximate purchase date.",
+            "Email support@yt2blog.org with the subject line “Refund request”, and include the email address used at checkout and the approximate purchase date.",
             "Alternatively, you can contact Paddle, our Merchant of Record, directly through the link in your purchase receipt. Paddle processes refunds on our behalf.",
             "We do not request passwords or sensitive payment details. Never send full card numbers by email.",
           ],
@@ -66,7 +66,7 @@ export default function RefundPage() {
         {
           heading: "Contact",
           paragraphs: [
-            "Refund questions can be sent to support@yt2blog.app. We reply within two business days, and refund requests inside the 7-day window are prioritised.",
+            "Refund questions can be sent to support@yt2blog.org. We reply within two business days, and refund requests inside the 7-day window are prioritised.",
           ],
         },
       ]}

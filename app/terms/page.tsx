@@ -106,7 +106,7 @@ export default function TermsPage() {
         {
           heading: "Contact",
           paragraphs: [
-            "Questions about these Terms can be sent to support@yt2blog.app. We aim to respond within two business days.",
+            "Questions about these Terms can be sent to support@yt2blog.org. We aim to respond within two business days.",
           ],
         },
       ]}
