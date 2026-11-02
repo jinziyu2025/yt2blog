@@ -21,9 +21,44 @@ const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 // map-reduce path: reasoning alone ranged 4,000-9,000 tokens before the first
 // content token, and 8,000/10,000 cut the article off mid-sentence. The budget
 // must cover reasoning plus a ~1,300-token article with margin.
-const MAX_TOKENS_FIRST = 12_000;
-const MAX_TOKENS_RETRY = 16_000;
+const MAX_TOKENS_FIRST = 16_000;
+const MAX_TOKENS_RETRY = 20_000;
 const MIN_ACCEPTABLE_WORDS = 600;
+
+// Article length is driven by the number of transcript slices, not by a fixed
+// template. A one-hour video (~30 slices) must get 20+ sections and a floor of
+// 3,000 words, so the later chapters cannot be compressed away.
+const WORDS_PER_SLICE = 120;
+const MIN_SCALE_SECTIONS = 5;
+const MAX_SCALE_SECTIONS = 30;
+
+type SourceScale = {
+  sections: number;
+  minWords: number;
+  targetWords: number;
+};
+
+function scaleForSource(chunks: number): SourceScale {
+  if (chunks <= 1) {
+    return { sections: 5, minWords: 900, targetWords: 1100 };
+  }
+
+  // One section per slice, minus a little overlap, so 30 slices -> 25 sections.
+  const sections = Math.min(
+    MAX_SCALE_SECTIONS,
+    Math.max(MIN_SCALE_SECTIONS, Math.ceil(chunks * 0.85))
+  );
+
+  // Never compress: every section gets room to breathe.
+  const bySlices = chunks * WORDS_PER_SLICE;
+  const minWords = Math.max(1_200, sections * 120, bySlices);
+
+  return {
+    sections,
+    minWords,
+    targetWords: Math.max(minWords + 400, Math.ceil(minWords * 1.15)),
+  };
+}
 
 // Long videos: the transcript is chunked and map-reduced before the final write.
 // Slices target 1,500-2,000 characters; there is no upper length limit, a long
@@ -192,7 +227,7 @@ function asString(value: unknown): string {
 /*  Prompts                                                            */
 /* ------------------------------------------------------------------ */
 
-function buildSystemPrompt(): string {
+function buildSystemPrompt(scale: SourceScale): string {
   return [
     "Stage 1 - pick the right writer before writing a single word.",
     "Read the transcript first (the first 500-800 words are enough) and decide what the video is really about.",
@@ -296,7 +331,7 @@ function buildSystemPrompt(): string {
     "## Section heading",
     "<section body of roughly 120-200 words>",
     "",
-    "(4-5 sections; open each with a scene, a detail, or a judgment - never \"Firstly\" or \"Secondly\")",
+    `(Target: about ${scale.sections} sections - one per distinct topic in the source material, and never fewer. A long multi-chapter video gets all of them; never squash twelve chapters into five sections. Open each with a scene, a detail, or a judgment - never "Firstly" or "Secondly")`,
     "",
     "## Conclusion",
     "<1-2 short paragraphs that simply stop somewhere honest - a last observation, an unresolved annoyance, a small concrete action. Never summarize the article, never write a final punchline, and never close with imperative advice (\"Be picky about who you accept.\")>",
@@ -305,7 +340,11 @@ function buildSystemPrompt(): string {
     "- Use only facts that appear in the transcript.",
     "- Never invent names, numbers, prices, addresses, or quotes that are not in the transcript. If in doubt, leave it out.",
     "- You may infer opinions and implications from the transcript, but not new facts.",
-    "- Total body (intro + sections + conclusion): 800-1,000 words.",
+    `- Total body (intro + sections + conclusion): ${scale.minWords}-${Math.max(
+      scale.minWords + 300,
+      scale.targetWords
+    )} words. Aim for the upper end when the source covers many chapters. Never drop a topic to stay short.`,
+    "- Coverage beats brevity: every distinct topic in the source material must appear somewhere in the article. A chapter that is missing from the draft counts as a failure.",
     "- Sentence pass before finishing: read every sentence and ask \"who does this?\" Any sentence without a visible subject (I, you, we, or a named person) must be rewritten. Count your I / you / we sentences; if they are under two thirds of the total, rewrite the impersonal ones.",
     "- Before finishing, read the first three words of every paragraph. No three in a row may share the same pattern; if they do, rewrite those openers.",
     "- No JSON, no code fences, no preamble, no commentary about your process.",
@@ -320,6 +359,8 @@ function buildUserPrompt(options: {
   transcript: string;
   retry: boolean;
   mapped: boolean;
+  scale: SourceScale;
+  chunks: number;
   reviseNote?: string;
 }): string {
   const sourceLabel = options.mapped
@@ -335,11 +376,16 @@ function buildUserPrompt(options: {
     options.transcript,
     '"""',
     "",
-    "Write the full 800-1,000 word English SEO article based on this source material now.",
+    `Write the full English SEO article now: roughly ${options.scale.sections} sections, ${options.scale.minWords}-${Math.max(
+      options.scale.minWords + 300,
+      options.scale.targetWords
+    )} words total.`,
   ];
 
   if (options.mapped) {
     lines.push(
+      `你是一个专业的 SEO 专家。提供的素材共有 ${options.chunks} 个切片。你必须完整扩写所有的切片细节，保证内容详实、字数达标。严禁敷衍缩写，严禁遗漏任何切片内容。`,
+      `You are a professional SEO writer. The source above contains ${options.chunks} slices from one video. Expand every slice in full, keep the article detailed and at or above the word target, and never abbreviate, skim, or drop any slice - especially the ones at the end. Cover at least ${options.scale.sections} sections.`,
       "These notes came from a chunked pass, so they must NOT be stitched together in order. Reorganize them into one continuous train of thought, merge repeated points, and write as a single person talking from the first line to the last. Never mention slices, chunks, notes, or summarising."
     );
   }
@@ -1311,7 +1357,6 @@ type GenOptions = {
 };
 
 async function generateArticle(options: GenOptions): Promise<BlogPost> {
-  const systemPrompt = buildSystemPrompt();
   let lastFailure = "";
   let reviseNote: string | undefined;
 
@@ -1326,9 +1371,11 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
   });
   const sourceText = mapped.text;
   const isMapped = mapped.chunks > 1;
+  const scale = scaleForSource(mapped.chunks);
+  const systemPrompt = buildSystemPrompt(scale);
 
   console.log(
-    `${LOG_PREFIX_MAP} source videoId=${options.videoId} mapped=${isMapped} chunks=${mapped.chunks} sourceChars=${sourceText.length}`
+    `${LOG_PREFIX_MAP} source videoId=${options.videoId} mapped=${isMapped} chunks=${mapped.chunks} sourceChars=${sourceText.length} sections=${scale.sections} words=${scale.minWords}-${scale.targetWords}`
   );
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1340,6 +1387,8 @@ async function generateArticle(options: GenOptions): Promise<BlogPost> {
       transcript: sourceText,
       retry,
       mapped: isMapped,
+      scale,
+      chunks: mapped.chunks,
       reviseNote,
     });
 
