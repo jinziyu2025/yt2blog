@@ -188,15 +188,64 @@ function AlertIcon() {
 const GHOST_BUTTON =
   "inline-flex items-center gap-1.5 rounded-lg border border-line bg-white/[0.02] px-3 py-1.5 text-xs text-muted transition hover:bg-white/[0.06] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
-// Rotating status copy shown in the article area while the pipeline runs.
-// One step every 3 seconds, looping until the first streamed character lands.
-const LOADING_STEPS = [
-  "Connecting and waking up server...",
-  "Fetching real YouTube subtitles...",
-  "Analyzing video content with AI...",
-  "Drafting SEO-friendly blog post...",
-  "Polishing English phrasing...",
-];
+// Waiting copy is derived from monotonic progress, never from a looping step
+// index, so the bar can only move forward and the label always matches the
+// percentage.
+const FALLBACK_ESTIMATE_SECONDS = 45;
+
+function stageLabel(progress: number): string {
+  if (progress >= 99) return "Almost there, finalizing...";
+  if (progress >= 80) return "Polishing and removing AI tone...";
+  if (progress >= 50) return "Generating SEO-optimized article...";
+  if (progress >= 20) return "Analyzing video content...";
+  return "Fetching video transcript...";
+}
+
+function extractVideoId(input: string): string | null {
+  const match = input.match(
+    /(?:v=|youtu\.be\/|shorts\/|embed\/|live\/)([A-Za-z0-9_-]{11})/
+  );
+  return match ? match[1] : null;
+}
+
+/**
+ * Best-effort duration lookup from the browser (no backend involved). If the
+ * request fails or the id is unknown we fall back to a fixed estimate, so the
+ * progress never depends on this succeeding.
+ */
+async function probeVideoDurationSeconds(videoId: string): Promise<number | null> {
+  try {
+    const response = await fetch(
+      `https://yt.lemnoslife.com/noKey/videos?part=contentDetails&id=${videoId}`,
+      { signal: AbortSignal.timeout(2500) }
+    );
+
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as {
+      items?: Array<{ contentDetails?: { duration?: string } }>;
+    };
+
+    const iso = payload.items?.[0]?.contentDetails?.duration;
+    const match = iso?.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!match) return null;
+
+    const hours = Number(match[1] ?? 0);
+    const minutes = Number(match[2] ?? 0);
+    const seconds = Number(match[3] ?? 0);
+    const total = hours * 3600 + minutes * 60 + seconds;
+
+    return total > 0 ? total : null;
+  } catch {
+    return null;
+  }
+}
+
+// 1 hour -> 60s, 15 min -> 15s, clamped so short clips still get some room.
+function estimateSecondsFor(durationSeconds: number | null): number {
+  if (!durationSeconds) return FALLBACK_ESTIMATE_SECONDS;
+  return Math.max(15, Math.min(90, Math.round(durationSeconds / 60)));
+}
 
 // Free plan: two generations per browser, counter kept in IndexedDB so that
 // clearing the HTTP cache does not reset it.
@@ -427,12 +476,13 @@ export default function HomePage() {
 
   // The generator page never renders the draft: it only waits, then hands the
   // user over to /blog/<slug> where the stream is displayed.
-  const [loadingStep, setLoadingStep] = useState(0);
+  const [progress, setProgress] = useState(0);
   const [usage, setUsage] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const estimateRef = useRef(FALLBACK_ESTIMATE_SECONDS);
 
   const isGenerating = status === "loading" || status === "streaming";
 
@@ -444,7 +494,21 @@ export default function HomePage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setLoadingStep(0);
+    setProgress(0);
+    estimateRef.current = FALLBACK_ESTIMATE_SECONDS;
+
+    const videoId = extractVideoId(sourceUrl);
+    if (videoId) {
+      void probeVideoDurationSeconds(videoId).then((duration) => {
+        estimateRef.current = estimateSecondsFor(duration);
+        console.log("[progress] estimate", {
+          videoId,
+          durationSeconds: duration,
+          estimateSeconds: estimateRef.current,
+        });
+      });
+    }
+
     setStatus("loading");
     setErrorMessage("");
 
@@ -489,6 +553,7 @@ export default function HomePage() {
         destination,
       });
 
+      setProgress(100);
       setStatus("idle");
       router.push(destination);
 
@@ -570,17 +635,21 @@ export default function HomePage() {
     void runGenerate(activeUrl);
   }
 
-  // Rotate the progress copy every 3s for as long as the server is working,
-  // so a 30-60s wait still feels alive.
+  // Monotonic progress: driven by elapsed time against the duration estimate.
+  // It only ever moves forward, stalls at 99% if the server is slow, and never
+  // restarts mid-run.
   useEffect(() => {
-    if (status !== "loading" && status !== "streaming") return;
+    if (!isGenerating) return;
 
+    const startedAt = performance.now();
     const timer = window.setInterval(() => {
-      setLoadingStep((previous) => (previous + 1) % LOADING_STEPS.length);
-    }, 3000);
+      const elapsed = (performance.now() - startedAt) / 1000;
+      const pct = Math.min(99, Math.floor((elapsed / estimateRef.current) * 100));
+      setProgress((previous) => (pct > previous ? pct : previous));
+    }, 500);
 
     return () => window.clearInterval(timer);
-  }, [status]);
+  }, [isGenerating]);
 
   // Restore the free-tier counter from IndexedDB on first paint, and ask the
   // server whether this browser already holds a valid admin cookie. A URL that
@@ -807,11 +876,13 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                {status === "streaming" ? "Writing your article…" : "Reading the video…"}
+                {progress}% complete
               </p>
 
               <div className="flex items-center gap-2">
-                <p className="font-mono text-[10.5px] text-muted/60">usually 20-60s</p>
+                <p className="font-mono text-[10.5px] text-muted/60">
+                  long videos take longer
+                </p>
                 <button type="button" onClick={handleCancel} className={GHOST_BUTTON}>
                   Cancel
                 </button>
@@ -823,27 +894,17 @@ export default function HomePage() {
                 <Spinner />
               </span>
 
-              <p className="text-[16px] font-semibold tracking-tight text-ink">
-                {status === "streaming"
-                  ? "AI is writing your article…"
-                  : "AI is analyzing your video…"}
-              </p>
-
               <p
-                key={loadingStep}
-                className="animate-fade-up text-[12.5px] leading-5 text-muted/75"
+                key={stageLabel(progress)}
+                className="animate-fade-up text-[16px] font-semibold tracking-tight text-ink"
               >
-                {LOADING_STEPS[loadingStep]}
+                {stageLabel(progress)}
               </p>
 
-              <div className="mt-1 h-1 w-56 overflow-hidden rounded-full bg-white/10">
+              <div className="mt-1 h-1.5 w-60 overflow-hidden rounded-full bg-white/10">
                 <div
-                  className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
-                  style={{
-                    width: `${Math.round(
-                      ((loadingStep + 1) / LOADING_STEPS.length) * 100
-                    )}%`,
-                  }}
+                  className="h-full rounded-full bg-accent transition-[width] duration-500 ease-linear"
+                  style={{ width: `${progress}%` }}
                 />
               </div>
 
@@ -854,8 +915,7 @@ export default function HomePage() {
               </div>
 
               <p className="font-mono text-[10.5px] text-muted/60">
-                step {loadingStep + 1} of {LOADING_STEPS.length} · we&apos;ll open
-                your article page automatically
+                we&apos;ll open your article page automatically when it&apos;s done
               </p>
             </div>
           </section>
