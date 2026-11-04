@@ -432,6 +432,7 @@ export default function HomePage() {
   const [reviseNotice, setReviseNotice] = useState("");
   const [loadingStep, setLoadingStep] = useState(0);
   const [usage, setUsage] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -584,6 +585,13 @@ export default function HomePage() {
       return;
     }
 
+    if (isAdmin) {
+      setFieldError(null);
+      setActiveUrl(url.trim());
+      void runGenerate(url.trim());
+      return;
+    }
+
     const used = await readGenerationsUsed();
 
     // Free tier exhausted: block the request and show the paywall instead.
@@ -630,9 +638,44 @@ export default function HomePage() {
     return () => window.clearInterval(timer);
   }, [status]);
 
-  // Restore the free-tier counter from IndexedDB on first paint.
+  // Restore the free-tier counter from IndexedDB on first paint, and ask the
+  // server whether this browser already holds a valid admin cookie. A URL that
+  // carries ?admin=<passcode> redeems the passcode server-side; the passcode
+  // itself is never stored in the browser.
   useEffect(() => {
     void readGenerationsUsed().then(setUsage);
+
+    let active = true;
+
+    const checkAdmin = async () => {
+      try {
+        const passcode = new URLSearchParams(window.location.search).get("admin");
+
+        if (passcode) {
+          const unlock = await fetch("/api/admin/unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ passcode }),
+          });
+
+          const result = (await unlock.json()) as { admin?: boolean };
+          if (active) setIsAdmin(Boolean(result.admin));
+          return;
+        }
+
+        const status = await fetch("/api/admin/unlock", { cache: "no-store" });
+        const result = (await status.json()) as { admin?: boolean };
+        if (active) setIsAdmin(Boolean(result.admin));
+      } catch {
+        if (active) setIsAdmin(false);
+      }
+    };
+
+    void checkAdmin();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
