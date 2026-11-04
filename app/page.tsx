@@ -193,7 +193,13 @@ const GHOST_BUTTON =
 // percentage.
 const FALLBACK_ESTIMATE_SECONDS = 45;
 
-function stageLabel(progress: number): string {
+// Asymptotic easing: progress creeps toward 99% instead of racing to it. At
+// the estimated time it is only ~90%, and it needs roughly 2.5x the estimate
+// to touch 99% — so a normal run never parks at 99 waiting for the server.
+const PROGRESS_EASING = 2.4;
+
+function stageLabel(progress: number, finalizing: boolean): string {
+  if (finalizing) return "Almost there, finalizing SEO details...";
   if (progress >= 99) return "Almost there, finalizing...";
   if (progress >= 80) return "Polishing and removing AI tone...";
   if (progress >= 50) return "Generating SEO-optimized article...";
@@ -477,6 +483,7 @@ export default function HomePage() {
   // The generator page never renders the draft: it only waits, then hands the
   // user over to /blog/<slug> where the stream is displayed.
   const [progress, setProgress] = useState(0);
+  const [finalizing, setFinalizing] = useState(false);
   const [usage, setUsage] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
@@ -495,6 +502,7 @@ export default function HomePage() {
     abortRef.current = controller;
 
     setProgress(0);
+    setFinalizing(false);
     estimateRef.current = FALLBACK_ESTIMATE_SECONDS;
 
     const videoId = extractVideoId(sourceUrl);
@@ -644,12 +652,25 @@ export default function HomePage() {
     const startedAt = performance.now();
     const timer = window.setInterval(() => {
       const elapsed = (performance.now() - startedAt) / 1000;
-      const pct = Math.min(99, Math.floor((elapsed / estimateRef.current) * 100));
+      const ratio = elapsed / estimateRef.current;
+      const eased = 99 * (1 - Math.exp(-PROGRESS_EASING * ratio));
+      const pct = Math.min(99, Math.floor(eased));
       setProgress((previous) => (pct > previous ? pct : previous));
     }, 500);
 
     return () => window.clearInterval(timer);
   }, [isGenerating]);
+
+  // Parked at 99% for more than 3s: soften the wait with a reassuring line.
+  useEffect(() => {
+    if (!isGenerating || progress < 99) {
+      setFinalizing(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => setFinalizing(true), 3000);
+    return () => window.clearTimeout(timer);
+  }, [isGenerating, progress]);
 
   // Restore the free-tier counter from IndexedDB on first paint, and ask the
   // server whether this browser already holds a valid admin cookie. A URL that
@@ -895,10 +916,10 @@ export default function HomePage() {
               </span>
 
               <p
-                key={stageLabel(progress)}
+                key={stageLabel(progress, finalizing)}
                 className="animate-fade-up text-[16px] font-semibold tracking-tight text-ink"
               >
-                {stageLabel(progress)}
+                {stageLabel(progress, finalizing)}
               </p>
 
               <div className="mt-1 h-1.5 w-60 overflow-hidden rounded-full bg-white/10">
