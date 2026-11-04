@@ -425,54 +425,26 @@ export default function HomePage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [activeUrl, setActiveUrl] = useState("");
 
-  // Live stream state: title lands first, body text is appended in batches.
-  const [streamTitle, setStreamTitle] = useState("");
-  const [streamMetaDescription, setStreamMetaDescription] = useState("");
-  const [streamText, setStreamText] = useState("");
-  const [reviseNotice, setReviseNotice] = useState("");
+  // The generator page never renders the draft: it only waits, then hands the
+  // user over to /blog/<slug> where the stream is displayed.
   const [loadingStep, setLoadingStep] = useState(0);
   const [usage, setUsage] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [paywallOpen, setPaywallOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const bufferRef = useRef("");
-  const flushTimerRef = useRef<number | null>(null);
-  const streamBoxRef = useRef<HTMLDivElement | null>(null);
 
   const isGenerating = status === "loading" || status === "streaming";
 
   /* ------------ actions ------------ */
 
-  function clearFlushTimer() {
-    if (flushTimerRef.current !== null) {
-      window.clearTimeout(flushTimerRef.current);
-      flushTimerRef.current = null;
-    }
-  }
-
-  // Batch deltas into ~50ms frames so React does not re-render per token.
-  function scheduleFlush() {
-    if (flushTimerRef.current !== null) return;
-
-    flushTimerRef.current = window.setTimeout(() => {
-      flushTimerRef.current = null;
-      setStreamText(bufferRef.current);
-    }, 50);
-  }
-
   async function runGenerate(sourceUrl: string, refresh = false) {
     abortRef.current?.abort();
-    clearFlushTimer();
 
     const controller = new AbortController();
     abortRef.current = controller;
 
-    bufferRef.current = "";
-    setStreamText("");
-    setStreamTitle("");
-    setStreamMetaDescription("");
-    setReviseNotice("");
+    setLoadingStep(0);
     setStatus("loading");
     setErrorMessage("");
 
@@ -480,28 +452,13 @@ export default function HomePage() {
       const result = await streamBlogPost(sourceUrl, {
         refresh,
         signal: controller.signal,
-        onMeta: (meta) => {
-          setStreamTitle(meta.title);
-          setStreamMetaDescription(meta.metaDescription);
+        onMeta: () => {
           setStatus("streaming");
         },
-        onDelta: (text) => {
-          bufferRef.current += text;
-          setReviseNotice("");
+        onDelta: () => {
           setStatus("streaming");
-          scheduleFlush();
-        },
-        onRevise: () => {
-          // The server is rewriting repetitive paragraph openers: drop the
-          // first draft so the rewrite streams in cleanly.
-          clearFlushTimer();
-          bufferRef.current = "";
-          setStreamText("");
-          setReviseNotice("Rewriting repetitive paragraph openers…");
         },
       });
-
-      clearFlushTimer();
 
       // Persist the draft so it gets a real, shareable /blog/<slug> URL.
       // localStorage stays as a fallback when Supabase is not configured.
@@ -550,14 +507,8 @@ export default function HomePage() {
         }
       }, 500);
     } catch (caught) {
-      clearFlushTimer();
-
       if (controller.signal.aborted) {
-        // User pressed Cancel: drop the partial draft and go back to idle.
-        bufferRef.current = "";
-        setStreamText("");
-        setStreamTitle("");
-        setStreamMetaDescription("");
+        // User pressed Cancel: go back to idle.
         setStatus("idle");
         return;
       }
@@ -619,18 +570,11 @@ export default function HomePage() {
     void runGenerate(activeUrl);
   }
 
+  // Rotate the progress copy every 3s for as long as the server is working,
+  // so a 30-60s wait still feels alive.
   useEffect(() => {
-    if (status !== "streaming") return;
-    const box = streamBoxRef.current;
-    if (box) box.scrollTop = box.scrollHeight;
-  }, [streamText, status]);
+    if (status !== "loading" && status !== "streaming") return;
 
-  // Rotate the progress copy every 3s while we are still waiting for the first
-  // byte from the server. Stops as soon as status flips to "streaming".
-  useEffect(() => {
-    if (status !== "loading") return;
-
-    setLoadingStep(0);
     const timer = window.setInterval(() => {
       setLoadingStep((previous) => (previous + 1) % LOADING_STEPS.length);
     }, 3000);
@@ -681,20 +625,10 @@ export default function HomePage() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
-      if (flushTimerRef.current !== null) {
-        window.clearTimeout(flushTimerRef.current);
-      }
     };
   }, []);
 
   /* ------------ render ------------ */
-
-  // Defensive guard: the persona tag is internal metadata and must never reach
-  // the reader, even if a future prompt change lets it slip into the stream.
-  const visibleStreamText = streamText.replace(
-    /<persona>[\s\S]*?<\/persona>/gi,
-    ""
-  );
 
   return (
     <main className="relative min-h-screen overflow-hidden">
@@ -863,7 +797,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Streaming / loading */}
+        {/* Loading / streaming: the generator page never renders the draft */}
         {(status === "loading" || status === "streaming") && (
           <section
             aria-busy="true"
@@ -872,124 +806,58 @@ export default function HomePage() {
           >
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full bg-accent ${
-                    status === "streaming" ? "animate-pulse" : ""
-                  }`}
-                />
-                {status === "streaming"
-                  ? "Streaming your draft…"
-                  : "Fetching captions & drafting…"}
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                {status === "streaming" ? "Writing your article…" : "Reading the video…"}
               </p>
 
               <div className="flex items-center gap-2">
-                <p className="font-mono text-[10.5px] text-muted/60">live stream</p>
-                <button
-                  type="button"
-                  onClick={handleCancel}
-                  className={GHOST_BUTTON}
-                >
+                <p className="font-mono text-[10.5px] text-muted/60">usually 20-60s</p>
+                <button type="button" onClick={handleCancel} className={GHOST_BUTTON}>
                   Cancel
                 </button>
               </div>
             </div>
 
-            {status === "loading" && !streamTitle && !streamText && (
-              <div className="mt-6 flex min-h-[190px] flex-col items-center justify-center gap-4 text-center">
-                <span className="grid h-9 w-9 place-items-center rounded-full border border-line bg-white/[0.03] text-accent">
-                  <Spinner />
-                </span>
+            <div className="mt-6 flex min-h-[190px] flex-col items-center justify-center gap-4 text-center">
+              <span className="grid h-10 w-10 place-items-center rounded-full border border-accent/30 bg-accent/5 text-accent">
+                <Spinner />
+              </span>
 
-                <p
-                  key={loadingStep}
-                  className="animate-fade-up text-[14px] font-medium tracking-tight text-ink"
-                >
-                  {LOADING_STEPS[loadingStep]}
-                </p>
-
-                <div className="flex items-center gap-1.5" aria-hidden="true">
-                  {LOADING_STEPS.map((step, index) => (
-                    <span
-                      key={step}
-                      className={`h-1 w-7 rounded-full transition-colors duration-300 ${
-                        index === loadingStep ? "bg-accent" : "bg-white/10"
-                      }`}
-                    />
-                  ))}
-                </div>
-
-                <p className="font-mono text-[10.5px] text-muted/60">
-                  step {loadingStep + 1} of {LOADING_STEPS.length} · the first
-                  draft can take up to a minute
-                </p>
-              </div>
-            )}
-
-            {streamTitle && (
-              <h2 className="mt-6 text-[24px] font-semibold leading-[1.25] tracking-[-0.02em] text-ink sm:text-[30px]">
-                {streamTitle}
-              </h2>
-            )}
-
-            {streamMetaDescription && (
-              <p className="mt-3 border-l-2 border-accent/50 pl-3 text-[12.5px] leading-6 text-muted">
-                {streamMetaDescription}
+              <p className="text-[16px] font-semibold tracking-tight text-ink">
+                {status === "streaming"
+                  ? "AI is writing your article…"
+                  : "AI is analyzing your video…"}
               </p>
-            )}
 
-            {reviseNotice && (
-              <p className="mt-4 font-mono text-[11px] text-accent/80">
-                {reviseNotice}
-              </p>
-            )}
-
-            {visibleStreamText && (
-              <div
-                ref={streamBoxRef}
-                className="mt-6 max-h-[58vh] overflow-y-auto pr-1"
+              <p
+                key={loadingStep}
+                className="animate-fade-up text-[12.5px] leading-5 text-muted/75"
               >
-                <div className="space-y-3.5">
-                  {visibleStreamText.split("\n").map((line, index) => {
-                    const trimmed = line.trim();
-                    if (!trimmed) return null;
-                    // The persona label is internal (server logs only).
-                    if (/^<\/?persona/i.test(trimmed)) return null;
+                {LOADING_STEPS[loadingStep]}
+              </p>
 
-                    if (trimmed.startsWith("## ")) {
-                      return (
-                        <h3
-                          key={index}
-                          className="pt-2 text-[17px] font-semibold tracking-[-0.01em] text-ink"
-                        >
-                          {trimmed.slice(3)}
-                        </h3>
-                      );
-                    }
-
-                    if (trimmed.startsWith("# ")) {
-                      return (
-                        <h3
-                          key={index}
-                          className="text-[17px] font-semibold tracking-[-0.01em] text-ink"
-                        >
-                          {trimmed.slice(2)}
-                        </h3>
-                      );
-                    }
-
-                    return (
-                      <p
-                        key={index}
-                        className="text-[14.5px] leading-[1.85] text-[#C8C8D0]"
-                      >
-                        {trimmed}
-                      </p>
-                    );
-                  })}
-                </div>
-                <span className="mt-1 inline-block h-4 w-1.5 animate-pulse bg-accent align-middle" />
+              <div className="mt-1 h-1 w-56 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
+                  style={{
+                    width: `${Math.round(
+                      ((loadingStep + 1) / LOADING_STEPS.length) * 100
+                    )}%`,
+                  }}
+                />
               </div>
-            )}
+
+              <div className="mt-2 w-full max-w-sm space-y-2" aria-hidden="true">
+                <div className="h-2.5 w-full animate-pulse rounded bg-white/[0.06]" />
+                <div className="h-2.5 w-11/12 animate-pulse rounded bg-white/[0.05]" />
+                <div className="h-2.5 w-9/12 animate-pulse rounded bg-white/[0.04]" />
+              </div>
+
+              <p className="font-mono text-[10.5px] text-muted/60">
+                step {loadingStep + 1} of {LOADING_STEPS.length} · we&apos;ll open
+                your article page automatically
+              </p>
+            </div>
           </section>
         )}
 
