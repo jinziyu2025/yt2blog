@@ -563,11 +563,12 @@ export default function HomePage() {
 
       setProgress(100);
       setStatus("idle");
-      router.push(destination);
+      router.replace(destination);
 
       // Safety net: if the soft navigation does not land (route missing from
-      // the client build, stale router state, blocked push), reload straight
+      // the client build, stale router state, blocked replace), reload straight
       // into the destination instead of leaving the user on the generator.
+      // location.replace keeps the history stack free of the generator page.
       window.setTimeout(() => {
         const current = window.location.pathname;
 
@@ -576,7 +577,7 @@ export default function HomePage() {
             destination,
             current,
           });
-          window.location.assign(destination);
+          window.location.replace(destination);
         }
       }, 500);
     } catch (caught) {
