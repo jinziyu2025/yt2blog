@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchEnglishTranscript } from "@/lib/supadata";
+import { getSupabaseServerClient } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -130,6 +131,65 @@ class HttpError extends Error {
   }
 }
 
+/**
+ * Upstream refused to answer because of its content policy. Kept separate from
+ * HttpError so the route can answer with a friendly message instead of leaking
+ * the provider's raw error to the browser.
+ */
+class ContentPolicyError extends HttpError {
+  detail: string;
+
+  constructor(detail: string) {
+    super(422, CONTENT_POLICY_MESSAGE);
+    this.name = "ContentPolicyError";
+    this.detail = detail;
+  }
+}
+
+const CONTENT_POLICY_MESSAGE =
+  "Oops! Our AI detected highly controversial topics in this video and cannot process it. Please try another video.";
+
+// Upstream wording varies (content_filter, sensitive, risk control, 违规...),
+// so match loosely instead of relying on one exact string.
+const CONTENT_POLICY_PATTERN =
+  /content[\s_-]?(filter|policy|moderation)|sensitive|inappropriate|unsafe|risk[\s_-]?control|safety[\s_-]?(system|filter|policy)|blocked by|违规|敏感|内容审核|风险/i;
+
+function isContentPolicyFailure(status: number, raw: string): boolean {
+  if (status !== 400 && status !== 403 && status !== 422) return false;
+  return CONTENT_POLICY_PATTERN.test(raw);
+}
+
+/** Best-effort audit trail; never blocks or breaks the response. */
+async function logContentBlock(entry: {
+  videoId: string;
+  model: string;
+  detail: string;
+}): Promise<void> {
+  try {
+    const client = getSupabaseServerClient();
+    if (!client) return;
+
+    const { error } = await client.from("error_logs").insert({
+      video_id: entry.videoId,
+      model: entry.model,
+      reason: "content-policy",
+      detail: entry.detail.slice(0, 500),
+    });
+
+    if (error) {
+      console.log(
+        `[risk] log-failed videoId=${entry.videoId} code=${error.code} message=${error.message}`
+      );
+      return;
+    }
+
+    console.log(`[risk] logged videoId=${entry.videoId} model=${entry.model}`);
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    console.log(`[risk] log-threw videoId=${entry.videoId} message=${message.slice(0, 120)}`);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -229,6 +289,9 @@ function asString(value: unknown): string {
 
 function buildSystemPrompt(scale: SourceScale): string {
   return [
+    "You are a professional SEO blog writer. Strictly avoid any political, religious, or highly controversial topics found in the transcript. Do not comment on or evaluate these topics. Focus solely on travel, culture, scenery, and neutral facts. If a segment is highly controversial, skip it and continue writing the rest of the article smoothly.",
+    "(中文要求：如果你在字幕中遇到敏感争议话题，必须直接跳过，绝对不评价。只写风景、人文和中立事实。跳过时不要留下任何痕迹，不要写\"这一部分我不讨论\"之类的说明，直接从上一段接到下一段。)",
+    "",
     "Stage 1 - pick the right writer before writing a single word.",
     "Read the transcript first (the first 500-800 words are enough) and decide what the video is really about.",
     "Output one persona tag at the very top, then keep that persona for the whole article.",
@@ -1111,6 +1174,9 @@ async function summarizeChunk(options: {
 
     if (!response.ok) {
       const raw = await response.text();
+      if (isContentPolicyFailure(response.status, raw)) {
+        throw new ContentPolicyError(`slice ${options.index + 1}: ${raw.slice(0, 300)}`);
+      }
       throw new HttpError(
         response.status >= 400 && response.status <= 599 ? response.status : 502,
         upstreamErrorMessage(response.status, raw, options.model)
@@ -1165,6 +1231,7 @@ async function mapTranscript(options: {
   const notes = new Array<string>(chunks.length);
   let cursor = 0;
   let failed = 0;
+  let blocked = 0;
 
   const worker = async (): Promise<void> => {
     while (true) {
@@ -1197,6 +1264,18 @@ async function mapTranscript(options: {
         }
       } catch (caught) {
         if (options.signal.aborted) return;
+
+        // The slice was refused upstream: never fall back to the raw slice,
+        // that would push the contested text straight into the final prompt.
+        if (caught instanceof ContentPolicyError) {
+          blocked += 1;
+          notes[index] = "";
+          console.log(
+            `${LOG_PREFIX_MAP} slice-blocked videoId=${options.videoId} chunk=${index + 1}/${chunks.length} detail=${caught.detail.slice(0, 100)}`
+          );
+          continue;
+        }
+
         failed += 1;
         notes[index] = chunks[index];
         const message = caught instanceof Error ? caught.message : String(caught);
@@ -1215,11 +1294,17 @@ async function mapTranscript(options: {
     throw new HttpError(499, "Client closed the request during the map phase.");
   }
 
+  // Nothing survived the filter: fail with the friendly message now instead of
+  // handing the model an empty brief.
+  if (chunks.length > 0 && blocked === chunks.length) {
+    throw new ContentPolicyError("every slice was refused by the upstream content filter");
+  }
+
   const merged = notes.filter(Boolean).join("\n\n").trim();
   const mapMs = Date.now() - startedAt;
 
   console.log(
-    `${LOG_PREFIX_MAP} done videoId=${options.videoId} chunks=${chunks.length} failed=${failed} notesChars=${merged.length} mapMs=${mapMs}`
+    `${LOG_PREFIX_MAP} done videoId=${options.videoId} chunks=${chunks.length} failed=${failed} blocked=${blocked} notesChars=${merged.length} mapMs=${mapMs}`
   );
 
   return {
@@ -1270,6 +1355,9 @@ async function streamDeepSeek(options: {
     console.log(
       `${LOG_PREFIX} stream attempt=${options.attempt} status=${response.status} body=${raw.slice(0, 500).replace(/\s+/g, " ")}`
     );
+    if (isContentPolicyFailure(response.status, raw)) {
+      throw new ContentPolicyError(raw.slice(0, 300));
+    }
     throw new HttpError(
       response.status >= 400 && response.status <= 599 ? response.status : 502,
       upstreamErrorMessage(response.status, raw, options.model)
@@ -1896,6 +1984,17 @@ export async function POST(request: Request) {
         const message =
           caught instanceof Error ? caught.message : "Generation failed unexpectedly.";
         const code = caught instanceof HttpError ? caught.status : 502;
+
+        if (caught instanceof ContentPolicyError) {
+          // Never leak the provider's raw filter error to the browser.
+          console.log(
+            `${LOG_PREFIX_STREAM} content-policy videoId=${videoId} model=${model} detail=${caught.detail.slice(0, 160)}`
+          );
+          void logContentBlock({ videoId, model, detail: caught.detail });
+          send("error", { message: CONTENT_POLICY_MESSAGE, code: 422 });
+          close();
+          return;
+        }
 
         console.log(
           `${LOG_PREFIX_STREAM} error videoId=${videoId} code=${code} message=${message.slice(0, 160)}`
